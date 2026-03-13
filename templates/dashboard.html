@@ -1,0 +1,296 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — EPP Inventory{% endblock %}
+{% block content %}
+
+<!-- Summary Cards -->
+<div class="summary-grid">
+    <div class="summary-card">
+        <div class="value">{{ components|length }}</div>
+        <div class="label">Components Tracked</div>
+    </div>
+    <div class="summary-card">
+        <div class="value">{{ "{:,}".format(total_stock) }}</div>
+        <div class="label">Total Items in Stock</div>
+    </div>
+    <div class="summary-card">
+        <div class="value">{{ kits|length }}</div>
+        <div class="label">Kit Definitions</div>
+    </div>
+    <div class="summary-card">
+        <div class="value {{ 'danger' if low_stock|length > 5 else 'warning' if low_stock|length > 0 else '' }}">{{ low_stock|length }}</div>
+        <div class="label">Low Stock Alerts</div>
+    </div>
+    <div class="summary-card">
+        <div class="value {{ 'danger' if min_buildable <= 0 else 'warning' if min_buildable < 5 else '' }}">{{ min_buildable }}</div>
+        <div class="label">Min Buildable (any kit)</div>
+    </div>
+</div>
+
+<!-- Action Bar -->
+<div style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">
+    <button class="btn btn-primary" onclick="syncOrders()" id="syncBtn">Sync Shopify Orders</button>
+    <button class="btn btn-success" onclick="location.reload()">Refresh</button>
+    <div id="syncStatus" style="font-size: 13px; color: #64748b; display: flex; align-items: center;"></div>
+</div>
+
+<!-- Tabs -->
+<div class="tabs">
+    <div class="tab active" onclick="showTab('inventory')">Component Inventory</div>
+    <div class="tab" onclick="showTab('kits')">Kit Builder / BOMs</div>
+    <div class="tab" onclick="showTab('orders')">Recent Orders</div>
+    <div class="tab" onclick="showTab('alerts')">Low Stock Alerts</div>
+    <div class="tab" onclick="showTab('log')">Activity Log</div>
+</div>
+
+<!-- Tab: Component Inventory -->
+<div id="tab-inventory" class="tab-content active">
+    <input type="text" class="search-box" placeholder="Search components..." oninput="filterComponents(this.value)">
+    {% for cat_name, cat_components in categories.items() %}
+    <div class="section">
+        <h2>{{ cat_name }}</h2>
+        <table>
+            <thead>
+                <tr><th>Part #</th><th>Name</th><th>In Stock</th><th>Reorder At</th><th>Adjust</th><th>Used In</th></tr>
+            </thead>
+            <tbody>
+                {% for c in cat_components %}
+                <tr class="comp-row" data-pn="{{ c.part_number }}" data-name="{{ c.name|lower }}">
+                    <td><strong>{{ c.part_number }}</strong></td>
+                    <td>{{ c.name }}</td>
+                    <td class="qty-cell {{ 'qty-critical' if c.qty <= 0 else 'qty-low' if c.qty <= c.reorder_threshold else 'qty-ok' }}">
+                        <span id="qty-{{ c.part_number }}">{{ c.qty }}</span>
+                    </td>
+                    <td>
+                        <input type="number" value="{{ c.reorder_threshold }}" min="0" style="width: 50px; text-align: center; background: #1f2937; border: 1px solid #374151; color: #e0e0e0; border-radius: 4px; padding: 2px 4px; font-size: 12px;"
+                            onchange="setThreshold('{{ c.part_number }}', this.value)">
+                    </td>
+                    <td>
+                        <div class="adjust-group">
+                            <button onclick="adjust('{{ c.part_number }}', -1)">-</button>
+                            <input type="number" id="adj-{{ c.part_number }}" value="0" min="0">
+                            <button onclick="adjust('{{ c.part_number }}', 1)">+</button>
+                            <button class="set-btn" onclick="setQty('{{ c.part_number }}')">Set</button>
+                        </div>
+                    </td>
+                    <td class="used-in">{{ used_in.get(c.part_number, ['-'])|join(', ') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Tab: Kit Builder -->
+<div id="tab-kits" class="tab-content">
+    <div class="section">
+        <h2>Kit Definitions (BOMs)</h2>
+        <table>
+            <thead>
+                <tr><th>Kit Name</th><th>Shopify ID</th><th>Variant</th><th>Components</th><th>Buildable</th></tr>
+            </thead>
+            <tbody>
+                {% for kit in kits %}
+                <tr>
+                    <td><strong>{{ kit.name }}</strong></td>
+                    <td style="color: #64748b; font-size: 12px;">{{ kit.shopify_id or '-' }}</td>
+                    <td style="color: #64748b; font-size: 12px;">{{ kit.shopify_variant or '-' }}</td>
+                    <td style="font-size: 12px;">
+                        {% for kc in kit.components %}
+                        <span style="color: {{ '#f87171' if kc.component.qty <= 0 else '#fbbf24' if kc.component.qty <= kc.component.reorder_threshold else '#94a3b8' }}">
+                            {{ kc.component.part_number }} x{{ kc.quantity }}{% if not loop.last %}, {% endif %}
+                        </span>
+                        {% endfor %}
+                    </td>
+                    <td class="qty-cell {{ 'qty-critical' if kit_buildable[kit.id] <= 0 else 'qty-low' if kit_buildable[kit.id] < 5 else 'qty-ok' }}">
+                        {{ kit_buildable[kit.id] }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Tab: Recent Orders -->
+<div id="tab-orders" class="tab-content">
+    <div class="section">
+        <h2>Recent Shopify Orders</h2>
+        {% if recent_orders %}
+        <table>
+            <thead>
+                <tr><th>Order #</th><th>Shopify ID</th><th>Total</th><th>Processed</th><th>Date</th></tr>
+            </thead>
+            <tbody>
+                {% for order in recent_orders %}
+                <tr>
+                    <td><strong>#{{ order.order_number }}</strong></td>
+                    <td style="color: #64748b; font-size: 12px;">{{ order.shopify_order_id }}</td>
+                    <td>${{ order.total_price or '-' }}</td>
+                    <td>
+                        {% if order.processed %}
+                        <span style="color: #4ade80;">Processed</span>
+                        {% else %}
+                        <span style="color: #fbbf24;">Pending</span>
+                        {% endif %}
+                    </td>
+                    <td style="color: #64748b; font-size: 12px;">{{ order.created_at.strftime('%Y-%m-%d %H:%M') if order.created_at else '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color: #64748b; padding: 20px;">No orders synced yet. Click "Sync Shopify Orders" to pull recent orders.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Tab: Low Stock Alerts -->
+<div id="tab-alerts" class="tab-content">
+    <div class="section">
+        <h2>Low Stock Alerts ({{ low_stock|length }})</h2>
+        {% if low_stock %}
+        <table>
+            <thead>
+                <tr><th>Part #</th><th>Name</th><th>Category</th><th>In Stock</th><th>Reorder At</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+                {% for c in low_stock|sort(attribute='qty') %}
+                <tr>
+                    <td><strong>{{ c.part_number }}</strong></td>
+                    <td>{{ c.name }}</td>
+                    <td style="color: #64748b;">{{ c.category }}</td>
+                    <td class="qty-cell {{ 'qty-critical' if c.qty <= 0 else 'qty-low' }}">{{ c.qty }}</td>
+                    <td>{{ c.reorder_threshold }}</td>
+                    <td>
+                        {% if c.qty <= 0 %}
+                        <span style="color: #f87171; font-weight: 600;">OUT OF STOCK</span>
+                        {% else %}
+                        <span style="color: #fbbf24;">Low Stock</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color: #4ade80; padding: 20px;">All components are above reorder thresholds.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Tab: Activity Log -->
+<div id="tab-log" class="tab-content">
+    <div class="section">
+        <h2>Recent Activity</h2>
+        {% if recent_logs %}
+        {% for log in recent_logs %}
+        <div class="log-entry">
+            <span class="{{ 'log-positive' if log.qty_change > 0 else 'log-negative' }}">
+                {{ '+' if log.qty_change > 0 else '' }}{{ log.qty_change }}
+            </span>
+            <strong>{{ log.component.part_number }}</strong> — {{ log.reason }}
+            {% if log.user %}<span style="color: #64748b;"> by {{ log.user.name }}</span>{% endif %}
+            <span class="log-time">{{ log.created_at.strftime('%Y-%m-%d %H:%M') if log.created_at else '' }}</span>
+        </div>
+        {% endfor %}
+        {% else %}
+        <p style="color: #64748b; padding: 20px;">No activity yet.</p>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showTab(name) {
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    event.target.classList.add('active');
+}
+
+function filterComponents(query) {
+    query = query.toLowerCase();
+    document.querySelectorAll('.comp-row').forEach(row => {
+        const pn = row.dataset.pn.toLowerCase();
+        const name = row.dataset.name;
+        row.style.display = (pn.includes(query) || name.includes(query)) ? '' : 'none';
+    });
+}
+
+async function adjust(pn, direction) {
+    const input = document.getElementById('adj-' + pn);
+    const amount = Math.max(1, parseInt(input.value) || 1);
+    const change = direction * amount;
+    const res = await fetch('/api/adjust', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({part_number: pn, change: change, reason: 'Manual adjustment'})
+    });
+    const data = await res.json();
+    if (data.ok) {
+        document.getElementById('qty-' + pn).textContent = data.qty;
+        input.value = 0;
+        updateQtyStyle(pn, data.qty);
+    }
+}
+
+async function setQty(pn) {
+    const input = document.getElementById('adj-' + pn);
+    const qty = parseInt(input.value) || 0;
+    const res = await fetch('/api/set', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({part_number: pn, qty: qty})
+    });
+    const data = await res.json();
+    if (data.ok) {
+        document.getElementById('qty-' + pn).textContent = data.qty;
+        input.value = 0;
+        updateQtyStyle(pn, data.qty);
+    }
+}
+
+async function setThreshold(pn, threshold) {
+    await fetch('/api/threshold', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({part_number: pn, threshold: parseInt(threshold)})
+    });
+}
+
+function updateQtyStyle(pn, qty) {
+    const cell = document.getElementById('qty-' + pn).parentElement;
+    cell.className = 'qty-cell ' + (qty <= 0 ? 'qty-critical' : qty <= 10 ? 'qty-low' : 'qty-ok');
+}
+
+async function syncOrders() {
+    const btn = document.getElementById('syncBtn');
+    const status = document.getElementById('syncStatus');
+    btn.disabled = true;
+    btn.textContent = 'Syncing...';
+    status.textContent = '';
+    try {
+        const res = await fetch('/api/sync-orders', {method: 'POST'});
+        const data = await res.json();
+        if (data.error) {
+            status.textContent = 'Error: ' + data.error;
+            status.style.color = '#f87171';
+        } else {
+            const processed = (data.results || []).filter(r => r.status === 'processed').length;
+            const skipped = (data.results || []).filter(r => r.status === 'already_processed').length;
+            status.textContent = `Synced: ${processed} new, ${skipped} skipped. ${data.low_stock_count || 0} low stock alerts.`;
+            status.style.color = '#4ade80';
+            if (processed > 0) setTimeout(() => location.reload(), 1500);
+        }
+    } catch(e) {
+        status.textContent = 'Sync failed: ' + e.message;
+        status.style.color = '#f87171';
+    }
+    btn.disabled = false;
+    btn.textContent = 'Sync Shopify Orders';
+}
+</script>
+{% endblock %}

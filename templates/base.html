@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}EPP Inventory{% endblock %}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0e17; color: #e0e0e0; min-height: 100vh; }
+        a { color: #4fc3f7; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        .navbar { background: #111827; border-bottom: 1px solid #1e293b; padding: 0 24px; display: flex; align-items: center; height: 56px; }
+        .navbar-brand { font-size: 18px; font-weight: 700; color: #4fc3f7; margin-right: 32px; }
+        .navbar-links { display: flex; gap: 16px; flex: 1; }
+        .navbar-links a { color: #94a3b8; font-size: 14px; padding: 8px 12px; border-radius: 6px; }
+        .navbar-links a:hover, .navbar-links a.active { color: #fff; background: #1e293b; text-decoration: none; }
+        .navbar-right { display: flex; align-items: center; gap: 16px; font-size: 13px; color: #64748b; }
+        .navbar-right .user-name { color: #94a3b8; }
+
+        .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+
+        .flash { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+        .flash.error { background: #451a1a; color: #fca5a5; border: 1px solid #7f1d1d; }
+        .flash.success { background: #14532d; color: #86efac; border: 1px solid #166534; }
+        .flash.info { background: #1e3a5f; color: #93c5fd; border: 1px solid #1e40af; }
+
+        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s; }
+        .btn-primary { background: #2563eb; color: #fff; }
+        .btn-primary:hover { background: #1d4ed8; }
+        .btn-success { background: #059669; color: #fff; }
+        .btn-success:hover { background: #047857; }
+        .btn-danger { background: #dc2626; color: #fff; }
+        .btn-danger:hover { background: #b91c1c; }
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+
+        .card { background: #111827; border: 1px solid #1e293b; border-radius: 12px; padding: 20px; }
+        .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .summary-card { background: #111827; border: 1px solid #1e293b; border-radius: 12px; padding: 20px; text-align: center; }
+        .summary-card .value { font-size: 32px; font-weight: 700; color: #4fc3f7; }
+        .summary-card .value.danger { color: #f87171; }
+        .summary-card .value.warning { color: #fbbf24; }
+        .summary-card .label { font-size: 12px; color: #64748b; margin-top: 4px; }
+
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { text-align: left; padding: 10px 12px; background: #1e293b; color: #94a3b8; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+        td { padding: 8px 12px; border-bottom: 1px solid #1e293b; }
+        tr:hover { background: rgba(79,195,247,0.04); }
+        .qty-cell { font-weight: 600; font-size: 15px; }
+        .qty-ok { color: #4ade80; }
+        .qty-low { color: #fbbf24; }
+        .qty-critical { color: #f87171; }
+
+        .adjust-group { display: flex; align-items: center; gap: 4px; }
+        .adjust-group button { width: 28px; height: 28px; border: 1px solid #374151; background: #1f2937; color: #e0e0e0; border-radius: 4px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+        .adjust-group button:hover { background: #374151; }
+        .adjust-group input { width: 50px; text-align: center; background: #1f2937; border: 1px solid #374151; color: #e0e0e0; border-radius: 4px; padding: 4px; height: 28px; }
+        .adjust-group .set-btn { padding: 0 8px; width: auto; font-size: 11px; background: #2563eb; border-color: #2563eb; color: #fff; }
+        .adjust-group .set-btn:hover { background: #1d4ed8; }
+
+        .used-in { font-size: 11px; color: #64748b; max-width: 300px; }
+
+        .tabs { display: flex; gap: 4px; margin-bottom: 20px; }
+        .tab { padding: 8px 16px; background: #1f2937; border: 1px solid #374151; border-radius: 8px; cursor: pointer; font-size: 13px; color: #94a3b8; }
+        .tab:hover { background: #374151; }
+        .tab.active { background: #2563eb; border-color: #2563eb; color: #fff; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .search-box { width: 100%; padding: 10px 14px; background: #1f2937; border: 1px solid #374151; border-radius: 8px; color: #e0e0e0; font-size: 14px; margin-bottom: 16px; }
+        .search-box:focus { outline: none; border-color: #4fc3f7; }
+        .search-box::placeholder { color: #4b5563; }
+
+        .section { margin-bottom: 32px; }
+        .section h2 { font-size: 16px; color: #4fc3f7; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #1e293b; }
+
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+        .badge-admin { background: #7c3aed; color: #fff; }
+        .badge-user { background: #374151; color: #94a3b8; }
+
+        .log-entry { padding: 8px 0; border-bottom: 1px solid #1e293b; font-size: 13px; }
+        .log-time { color: #64748b; font-size: 11px; }
+        .log-positive { color: #4ade80; }
+        .log-negative { color: #f87171; }
+
+        @media (max-width: 768px) {
+            .container { padding: 12px; }
+            .summary-grid { grid-template-columns: repeat(2, 1fr); }
+            .navbar { padding: 0 12px; }
+            .used-in { display: none; }
+            table { font-size: 12px; }
+            td, th { padding: 6px 8px; }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-brand">EPP Inventory</div>
+        <div class="navbar-links">
+            {% if current_user.is_authenticated %}
+            <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint == 'dashboard' %}active{% endif %}">Dashboard</a>
+            {% if current_user.role == 'admin' %}
+            <a href="{{ url_for('admin_users') }}" class="{% if request.endpoint == 'admin_users' %}active{% endif %}">Users</a>
+            {% endif %}
+            {% endif %}
+        </div>
+        <div class="navbar-right">
+            {% if current_user.is_authenticated %}
+            <span class="user-name">{{ current_user.name }}</span>
+            <a href="{{ url_for('logout') }}">Logout</a>
+            {% endif %}
+        </div>
+    </nav>
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        {% for category, message in messages %}
+        <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+        {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+    </div>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
