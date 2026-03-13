@@ -6,7 +6,7 @@
 <div style="background: linear-gradient(135deg, #1e3a5f 0%, #111827 100%); border: 1px solid #2563eb; border-radius: 12px; padding: 20px 24px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between;">
     <div>
         <div style="font-size: 13px; color: #64748b; text-transform: uppercase; letter-spacing: 1px;">Inventory Retail Value</div>
-        <div style="font-size: 36px; font-weight: 700; color: #4ade80;">${{ "{:,.0f}".format(total_retail_value) }}</div>
+        <div style="font-size: 36px; font-weight: 700; color: #4ade80;">${{ "{:,.0f}".format(total_retail_value or 0) }}</div>
         <div style="font-size: 12px; color: #64748b;">Based on buildable kits at base retail pricing</div>
     </div>
     <div style="display: flex; gap: 24px; text-align: center;">
@@ -146,7 +146,7 @@
                 {% for kit in kits %}
                 <tr>
                     <td><strong>{{ kit.name }}</strong></td>
-                    <td style="color: #94a3b8;">${{ "{:,.0f}".format(kit.retail_price) if kit.retail_price else '-' }}</td>
+                    <td style="color: #94a3b8;">{% if kit.retail_price %}${{ "{:,.0f}".format(kit.retail_price) }}{% else %}-{% endif %}</td>
                     <td style="font-size: 12px;">
                         {% for kc in kit.components %}
                         <span style="color: {{ '#f87171' if kc.component.qty <= 0 else '#fbbf24' if kc.component.qty <= kc.component.reorder_threshold else '#94a3b8' }}">
