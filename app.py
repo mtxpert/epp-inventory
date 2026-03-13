@@ -731,6 +731,42 @@ def register_routes(app):
             })
         return jsonify(parts)
 
+    @app.route('/api/kit-hose-calc', methods=['POST'])
+    @login_required
+    def kit_hose_calc():
+        """Calculate total hoses needed for a given number of kits."""
+        data = request.get_json()
+        kit_qtys = data.get('kit_qtys', {})  # {kit_slug: qty}
+
+        totals = {}  # {part_number: {name, total_needed, in_stock, per_kit_breakdown}}
+        for slug, qty in kit_qtys.items():
+            if qty <= 0:
+                continue
+            kit = Kit.query.filter_by(slug=slug).first()
+            if not kit:
+                continue
+            for kc in kit.components:
+                if kc.component.category != 'couplers':
+                    continue
+                pn = kc.component.part_number
+                if pn not in totals:
+                    totals[pn] = {
+                        'name': kc.component.name,
+                        'in_stock': kc.component.qty,
+                        'total_needed': 0,
+                        'breakdown': []
+                    }
+                needed = kc.quantity * qty
+                totals[pn]['total_needed'] += needed
+                totals[pn]['breakdown'].append(f"{kit.name} x{qty} = {needed}")
+
+        result = []
+        for pn, info in sorted(totals.items()):
+            info['part_number'] = pn
+            info['to_order'] = max(0, info['total_needed'] - info['in_stock'])
+            result.append(info)
+        return jsonify(result)
+
     # ── Shopify Webhook ──────────────────────────────────────────
 
     @app.route('/webhook/shopify/order', methods=['POST'])

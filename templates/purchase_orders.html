@@ -23,6 +23,40 @@
         </div>
     </div>
 
+    <!-- Kit-Based Hose Calculator (shows for R-EP) -->
+    <div id="kit-hose-calc" style="display: none; margin-bottom: 20px;">
+        <h3 style="font-size: 14px; color: #4fc3f7; margin-bottom: 12px;">Order by Kit Quantity</h3>
+        <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px;">
+            <div>
+                <label style="font-size: 12px; color: #64748b;">SHO/Flex Hot Pipes</label>
+                <input type="number" id="kit-hot_pipes_sho" value="0" min="0" class="kit-qty-input" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+            </div>
+            <div>
+                <label style="font-size: 12px; color: #64748b;">Fusion Intake</label>
+                <input type="number" id="kit-fusion_intake" value="0" min="0" class="kit-qty-input" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+            </div>
+            <div>
+                <label style="font-size: 12px; color: #64748b;">Fusion Charge</label>
+                <input type="number" id="kit-fusion_charge" value="0" min="0" class="kit-qty-input" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+            </div>
+            <div>
+                <label style="font-size: 12px; color: #64748b;">SHO Intake (Custom)</label>
+                <input type="number" id="kit-intake_custom_hose" value="0" min="0" class="kit-qty-input" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+            </div>
+            <div>
+                <label style="font-size: 12px; color: #64748b;">NMD Pipe</label>
+                <input type="number" id="kit-nmd" value="0" min="0" class="kit-qty-input" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+            </div>
+            <div>
+                <label style="font-size: 12px; color: #64748b;">Explorer Hose Add-on</label>
+                <input type="number" id="kit-explorer_addon" value="0" min="0" class="kit-qty-input" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+                <span style="font-size: 10px; color: #64748b;">EXP-45-63</span>
+            </div>
+        </div>
+        <button class="btn btn-primary" onclick="calcKitHoses()">Calculate Hoses Needed</button>
+        <div id="kit-hose-result" style="margin-top: 12px;"></div>
+    </div>
+
     <div id="po-parts" style="display: none;">
         <table>
             <thead>
@@ -106,9 +140,15 @@
 let supplierParts = [];
 
 async function loadSupplierParts() {
-    const supplierId = document.getElementById('po-supplier').value;
+    const sel = document.getElementById('po-supplier');
+    const supplierId = sel.value;
     const partsDiv = document.getElementById('po-parts');
-    if (!supplierId) { partsDiv.style.display = 'none'; return; }
+    const kitCalc = document.getElementById('kit-hose-calc');
+    if (!supplierId) { partsDiv.style.display = 'none'; kitCalc.style.display = 'none'; return; }
+
+    // Show kit calculator for hose supplier (R-EP)
+    const supplierName = sel.options[sel.selectedIndex].text;
+    kitCalc.style.display = supplierName.includes('R-EP') ? 'block' : 'none';
 
     const res = await fetch(`/api/supplier/${supplierId}/components`);
     supplierParts = await res.json();
@@ -194,6 +234,63 @@ async function cancelPO(poId) {
     const res = await fetch(`/api/po/${poId}/cancel`, {method: 'POST'});
     const data = await res.json();
     if (data.ok) location.reload();
+}
+
+async function calcKitHoses() {
+    const kitQtys = {};
+    const slugs = ['hot_pipes_sho', 'fusion_intake', 'fusion_charge', 'intake_custom_hose', 'nmd'];
+    slugs.forEach(slug => {
+        const val = parseInt(document.getElementById('kit-' + slug).value) || 0;
+        if (val > 0) kitQtys[slug] = val;
+    });
+
+    // Explorer add-on: add explorer hot pipes hoses separately
+    const explorerAddon = parseInt(document.getElementById('kit-explorer_addon').value) || 0;
+    if (explorerAddon > 0) kitQtys['hot_pipes_explorer'] = explorerAddon;
+
+    if (!Object.keys(kitQtys).length) {
+        document.getElementById('kit-hose-result').innerHTML = '<span style="color:#f87171;">Enter kit quantities above</span>';
+        return;
+    }
+
+    const res = await fetch('/api/kit-hose-calc', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({kit_qtys: kitQtys})
+    });
+    const data = await res.json();
+
+    let html = '<table><thead><tr><th>Part #</th><th>Name</th><th>Need</th><th>In Stock</th><th>Order</th><th>Breakdown</th></tr></thead><tbody>';
+    data.forEach(p => {
+        html += `<tr>
+            <td><strong>${p.part_number}</strong></td>
+            <td>${p.name}</td>
+            <td style="color:#4fc3f7; font-weight:600;">${p.total_needed}</td>
+            <td class="qty-cell ${p.in_stock <= 0 ? 'qty-critical' : p.in_stock <= p.total_needed ? 'qty-low' : 'qty-ok'}">${p.in_stock}</td>
+            <td style="color:${p.to_order > 0 ? '#f87171' : '#4ade80'}; font-weight:600;">${p.to_order}</td>
+            <td style="font-size:11px; color:#64748b;">${p.breakdown.join(', ')}</td>
+        </tr>`;
+    });
+    html += '</tbody></table>';
+    html += '<div style="margin-top:12px;"><button class="btn btn-primary" onclick="applyKitHosesToPO()">Apply to PO Below</button></div>';
+    document.getElementById('kit-hose-result').innerHTML = html;
+
+    // Store for applying
+    window._kitHoseData = data;
+}
+
+function applyKitHosesToPO() {
+    if (!window._kitHoseData) return;
+    // Check all hoses in the PO table and set quantities
+    window._kitHoseData.forEach(p => {
+        const check = document.querySelector(`.po-check[data-pn="${p.part_number}"]`);
+        const qtyInput = document.querySelector(`.po-qty[data-pn="${p.part_number}"]`);
+        if (check && qtyInput && p.to_order > 0) {
+            check.checked = true;
+            qtyInput.value = p.to_order;
+        }
+    });
+    document.getElementById('po-status').textContent = 'Kit hose quantities applied to PO';
+    document.getElementById('po-status').style.color = '#4ade80';
 }
 
 async function sendRFQ() {
