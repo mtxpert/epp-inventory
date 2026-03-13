@@ -224,7 +224,7 @@ def register_routes(app):
         low_stock = [c for c in components if c.qty <= c.reorder_threshold]
         total_stock = sum(c.qty for c in components)
 
-        # Calculate min buildable for each kit
+        # Calculate min buildable for each kit (all components)
         kit_buildable = {}
         for kit in kits:
             if kit.components:
@@ -236,12 +236,37 @@ def register_routes(app):
 
         min_buildable = min(kit_buildable.values()) if kit_buildable else 0
 
-        # Calculate total retail value of buildable inventory
-        total_retail_value = 0
-        for kit in kits:
-            buildable = kit_buildable.get(kit.id, 0)
-            if buildable > 0 and kit.retail_price:
-                total_retail_value += buildable * kit.retail_price
+        # Priority-based PIPE-ONLY buildable (clamps/hoses are commodity)
+        # Priority: SHO Hot Pipes → Intakes → Explorer Hot → Fusion → F150 → NMD leftovers
+        kit_priority = {
+            'hot_pipes_sho': 1,
+            'intake_stock_hose': 2,
+            'intake_custom_hose': 3,
+            'hot_pipes_explorer': 4,
+            'fusion_intake': 5,
+            'fusion_charge': 6,
+            'f150_intake': 7,
+            'nmd_upgrade': 8,
+            'nmd': 9,
+            'explorer_nmd': 10,
+        }
+        pipe_stock = {c.id: c.qty for c in components if c.category == 'pipes'}
+        kits_by_priority = sorted(kits, key=lambda k: kit_priority.get(k.slug, 99))
+        kit_pipe_buildable = {}
+        for kit in kits_by_priority:
+            pipe_parts = [kc for kc in kit.components if kc.component.category == 'pipes']
+            if not pipe_parts:
+                kit_pipe_buildable[kit.id] = 0
+                continue
+            max_build = min(pipe_stock.get(kc.component_id, 0) // kc.quantity for kc in pipe_parts)
+            kit_pipe_buildable[kit.id] = max_build
+            for kc in pipe_parts:
+                pipe_stock[kc.component_id] = pipe_stock.get(kc.component_id, 0) - (kc.quantity * max_build)
+
+        total_retail_value = sum(
+            kit_pipe_buildable.get(kit.id, 0) * (kit.retail_price or 0)
+            for kit in kits if kit_pipe_buildable.get(kit.id, 0) > 0
+        )
 
         # Group components by category (ordered)
         cat_order = ['pipes', 'couplers', 'clamps', 'misc']
@@ -268,6 +293,7 @@ def register_routes(app):
             components=components, kits=kits, categories=categories,
             low_stock=low_stock, total_stock=total_stock,
             kit_buildable=kit_buildable, min_buildable=min_buildable,
+            kit_pipe_buildable=kit_pipe_buildable,
             total_retail_value=total_retail_value,
             used_in=used_in, recent_orders=recent_orders, recent_logs=recent_logs)
 

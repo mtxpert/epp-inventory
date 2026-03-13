@@ -3,19 +3,29 @@
 {% block content %}
 
 <!-- Retail Value Banner -->
-<div style="background: linear-gradient(135deg, #1e3a5f 0%, #111827 100%); border: 1px solid #2563eb; border-radius: 12px; padding: 20px 24px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between;">
-    <div>
-        <div style="font-size: 13px; color: #64748b; text-transform: uppercase; letter-spacing: 1px;">Inventory Retail Value</div>
-        <div style="font-size: 36px; font-weight: 700; color: #4ade80;">${{ "{:,.0f}".format(total_retail_value or 0) }}</div>
-        <div style="font-size: 12px; color: #64748b;">Based on buildable kits at base retail pricing</div>
+<div style="background: linear-gradient(135deg, #1e3a5f 0%, #111827 100%); border: 1px solid #2563eb; border-radius: 12px; padding: 20px 24px; margin-bottom: 20px;">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+        <div>
+            <div style="font-size: 13px; color: #64748b; text-transform: uppercase; letter-spacing: 1px;">Inventory Retail Value (Pipe-Limited)</div>
+            <div style="font-size: 36px; font-weight: 700; color: #4ade80;">${{ "{:,.0f}".format(total_retail_value or 0) }}</div>
+            <div style="font-size: 12px; color: #64748b;">Priority allocation: SHO Hot Pipes &rarr; Intakes &rarr; Explorer &rarr; Fusion &rarr; F150 &rarr; NMD leftovers</div>
+        </div>
     </div>
-    <div style="display: flex; gap: 24px; text-align: center;">
-        {% for kit in kits %}
-        {% if kit.retail_price and kit_buildable[kit.id] > 0 %}
-        <div style="min-width: 80px;">
-            <div style="font-size: 18px; font-weight: 600; color: #4fc3f7;">{{ kit_buildable[kit.id] }}</div>
-            <div style="font-size: 10px; color: #64748b; line-height: 1.3;">{{ kit.name|truncate(25) }}</div>
-            <div style="font-size: 11px; color: #94a3b8;">${{ "{:,.0f}".format(kit.retail_price) }} ea</div>
+    <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+        {% for kit in kits|sort(attribute='id') %}
+        {% if kit_pipe_buildable[kit.id] > 0 and kit.retail_price %}
+        <div style="background: #1f2937; border: 1px solid #374151; border-radius: 8px; padding: 10px 14px; min-width: 140px; text-align: center;">
+            <div style="font-size: 20px; font-weight: 700; color: #4fc3f7;">{{ kit_pipe_buildable[kit.id] }}</div>
+            <div style="font-size: 11px; color: #e0e0e0; line-height: 1.3;">{{ kit.name }}</div>
+            <div style="font-size: 12px; color: #94a3b8;">${{ "{:,.0f}".format(kit.retail_price) }} ea</div>
+            <div style="font-size: 13px; font-weight: 600; color: #4ade80; margin-top: 4px;">${{ "{:,.0f}".format(kit_pipe_buildable[kit.id] * kit.retail_price) }}</div>
+        </div>
+        {% elif kit.retail_price %}
+        <div style="background: #1f2937; border: 1px solid #374151; border-radius: 8px; padding: 10px 14px; min-width: 140px; text-align: center; opacity: 0.5;">
+            <div style="font-size: 20px; font-weight: 700; color: #f87171;">0</div>
+            <div style="font-size: 11px; color: #e0e0e0; line-height: 1.3;">{{ kit.name }}</div>
+            <div style="font-size: 12px; color: #64748b;">${{ "{:,.0f}".format(kit.retail_price) }} ea</div>
+            <div style="font-size: 13px; color: #64748b; margin-top: 4px;">No pipes</div>
         </div>
         {% endif %}
         {% endfor %}
@@ -140,7 +150,7 @@
         <h2>Kit Definitions (BOMs)</h2>
         <table>
             <thead>
-                <tr><th>Kit Name</th><th>Price</th><th>Components</th><th>Buildable</th><th>Value</th><th>Build</th></tr>
+                <tr><th>Kit Name</th><th>Price</th><th>Components</th><th>Buildable</th><th>Pipe-Limited</th><th>Value</th><th>Build</th></tr>
             </thead>
             <tbody>
                 {% for kit in kits %}
@@ -157,9 +167,12 @@
                     <td class="qty-cell {{ 'qty-critical' if kit_buildable[kit.id] <= 0 else 'qty-low' if kit_buildable[kit.id] < 5 else 'qty-ok' }}">
                         {{ kit_buildable[kit.id] }}
                     </td>
+                    <td class="qty-cell {{ 'qty-critical' if kit_pipe_buildable[kit.id] <= 0 else 'qty-low' if kit_pipe_buildable[kit.id] < 5 else 'qty-ok' }}">
+                        {{ kit_pipe_buildable[kit.id] }}
+                    </td>
                     <td style="color: #4ade80; font-weight: 600;">
-                        {% if kit.retail_price and kit_buildable[kit.id] > 0 %}
-                        ${{ "{:,.0f}".format(kit_buildable[kit.id] * kit.retail_price) }}
+                        {% if kit.retail_price and kit_pipe_buildable[kit.id] > 0 %}
+                        ${{ "{:,.0f}".format(kit_pipe_buildable[kit.id] * kit.retail_price) }}
                         {% else %}-{% endif %}
                     </td>
                     <td>
