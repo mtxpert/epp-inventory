@@ -21,6 +21,9 @@ def create_app():
     database_url = os.environ.get('DATABASE_URL', 'sqlite:///inventory.db')
     if database_url.startswith('postgres://'):
         database_url = database_url.replace('postgres://', 'postgresql://', 1)
+    if 'postgresql' in database_url and 'sslmode' not in database_url:
+        separator = '&' if '?' in database_url else '?'
+        database_url += f'{separator}sslmode=require'
 
     app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-change-me')
     app.config['SQLALCHEMY_DATABASE_URI'] = database_url
