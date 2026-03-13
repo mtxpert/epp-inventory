@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}Purchase Orders — EPP Inventory{% endblock %}
+{% block content %}
+
+<h1 style="font-size: 22px; margin-bottom: 24px;">Purchase Orders</h1>
+
+<!-- Create New PO -->
+<div class="card" style="margin-bottom: 24px;">
+    <h2 style="font-size: 16px; color: #4fc3f7; margin-bottom: 16px;">Create Purchase Order</h2>
+    <div style="display: flex; gap: 16px; align-items: end; flex-wrap: wrap; margin-bottom: 16px;">
+        <div>
+            <label style="font-size: 12px; color: #64748b; display: block; margin-bottom: 4px;">Supplier</label>
+            <select id="po-supplier" onchange="loadSupplierParts()" style="padding: 8px 12px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 13px; min-width: 250px;">
+                <option value="">Select supplier...</option>
+                {% for s in suppliers %}
+                <option value="{{ s.id }}" data-email="{{ s.email }}">{{ s.name }} ({{ s.email }})</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div style="flex: 1;">
+            <label style="font-size: 12px; color: #64748b; display: block; margin-bottom: 4px;">Notes</label>
+            <input type="text" id="po-notes" placeholder="Optional notes..." style="width: 100%; padding: 8px 12px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 13px;">
+        </div>
+    </div>
+
+    <div id="po-parts" style="display: none;">
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 30px;"><input type="checkbox" id="select-all" onchange="toggleAll(this.checked)"></th>
+                    <th>Part #</th>
+                    <th>Name</th>
+                    <th>In Stock</th>
+                    <th>Reorder At</th>
+                    <th>Order Qty</th>
+                </tr>
+            </thead>
+            <tbody id="po-parts-body"></tbody>
+        </table>
+        <div style="margin-top: 16px; display: flex; gap: 12px; align-items: center;">
+            <button class="btn btn-primary" onclick="createPO()">Create PO</button>
+            <button class="btn" style="background: #475569; color: #fff;" onclick="autoFillReorder()">Auto-Fill Low Stock</button>
+            <span id="po-status" style="font-size: 13px;"></span>
+        </div>
+    </div>
+</div>
+
+<!-- Existing POs -->
+<div class="card">
+    <h2 style="font-size: 16px; color: #4fc3f7; margin-bottom: 16px;">Order History</h2>
+    {% if purchase_orders %}
+    <table>
+        <thead>
+            <tr><th>PO #</th><th>Supplier</th><th>Items</th><th>Status</th><th>Created</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+            {% for po in purchase_orders %}
+            <tr>
+                <td><strong>{{ po.po_number }}</strong></td>
+                <td>{{ po.supplier.name }}</td>
+                <td>
+                    {% for line in po.lines %}
+                    <span style="color: #94a3b8; font-size: 12px;">{{ line.component.part_number }} x{{ line.qty }}{% if not loop.last %}, {% endif %}</span>
+                    {% endfor %}
+                </td>
+                <td>
+                    {% if po.status == 'draft' %}
+                    <span class="badge" style="background: #374151; color: #94a3b8;">Draft</span>
+                    {% elif po.status == 'sent' %}
+                    <span class="badge" style="background: #1e40af; color: #93c5fd;">Sent</span>
+                    {% elif po.status == 'received' %}
+                    <span class="badge" style="background: #166534; color: #86efac;">Received</span>
+                    {% elif po.status == 'cancelled' %}
+                    <span class="badge" style="background: #7f1d1d; color: #fca5a5;">Cancelled</span>
+                    {% endif %}
+                </td>
+                <td style="color: #64748b; font-size: 12px;">{{ po.created_at.strftime('%Y-%m-%d %H:%M') if po.created_at else '-' }}</td>
+                <td>
+                    {% if po.status == 'draft' %}
+                    <button class="btn btn-primary btn-sm" onclick="sendPO({{ po.id }})">Email to Supplier</button>
+                    <button class="btn btn-sm" style="background: #475569; color: #fff;" onclick="cancelPO({{ po.id }})">Cancel</button>
+                    {% elif po.status == 'sent' %}
+                    <button class="btn btn-success btn-sm" onclick="receivePO({{ po.id }})">Mark Received</button>
+                    <button class="btn btn-sm" style="background: #475569; color: #fff;" onclick="cancelPO({{ po.id }})">Cancel</button>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: #64748b; padding: 20px;">No purchase orders yet.</p>
+    {% endif %}
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+let supplierParts = [];
+
+async function loadSupplierParts() {
+    const supplierId = document.getElementById('po-supplier').value;
+    const partsDiv = document.getElementById('po-parts');
+    if (!supplierId) { partsDiv.style.display = 'none'; return; }
+
+    const res = await fetch(`/api/supplier/${supplierId}/components`);
+    supplierParts = await res.json();
+
+    const tbody = document.getElementById('po-parts-body');
+    tbody.innerHTML = supplierParts.map(p => `
+        <tr style="${p.needs_reorder ? 'background: rgba(251,191,36,0.05);' : ''}">
+            <td><input type="checkbox" class="po-check" data-pn="${p.part_number}" ${p.needs_reorder ? 'checked' : ''}></td>
+            <td><strong>${p.part_number}</strong></td>
+            <td>${p.name}</td>
+            <td class="qty-cell ${p.qty <= 0 ? 'qty-critical' : p.qty <= p.reorder_threshold ? 'qty-low' : 'qty-ok'}">${p.qty}</td>
+            <td>${p.reorder_threshold}</td>
+            <td><input type="number" class="po-qty" data-pn="${p.part_number}" value="${p.needs_reorder ? Math.max(p.reorder_threshold * 2 - p.qty, 10) : 0}" min="0" style="width: 70px; padding: 4px 8px; background: #1f2937; border: 1px solid #374151; border-radius: 4px; color: #e0e0e0; font-size: 13px; text-align: center;"></td>
+        </tr>
+    `).join('');
+    partsDiv.style.display = 'block';
+}
+
+function toggleAll(checked) {
+    document.querySelectorAll('.po-check').forEach(cb => cb.checked = checked);
+}
+
+function autoFillReorder() {
+    supplierParts.forEach(p => {
+        const qtyInput = document.querySelector(`.po-qty[data-pn="${p.part_number}"]`);
+        const check = document.querySelector(`.po-check[data-pn="${p.part_number}"]`);
+        if (p.needs_reorder) {
+            check.checked = true;
+            qtyInput.value = Math.max(p.reorder_threshold * 2 - p.qty, 10);
+        }
+    });
+}
+
+async function createPO() {
+    const supplierId = document.getElementById('po-supplier').value;
+    const notes = document.getElementById('po-notes').value;
+    const status = document.getElementById('po-status');
+
+    const lines = [];
+    document.querySelectorAll('.po-check:checked').forEach(cb => {
+        const pn = cb.dataset.pn;
+        const qty = parseInt(document.querySelector(`.po-qty[data-pn="${pn}"]`).value) || 0;
+        if (qty > 0) lines.push({part_number: pn, qty: qty});
+    });
+
+    if (!lines.length) { status.textContent = 'Select items and enter quantities'; status.style.color = '#f87171'; return; }
+
+    const res = await fetch('/api/po/create', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({supplier_id: parseInt(supplierId), notes: notes, lines: lines})
+    });
+    const data = await res.json();
+    if (data.ok) {
+        status.textContent = `Created ${data.po_number}`;
+        status.style.color = '#4ade80';
+        setTimeout(() => location.reload(), 800);
+    } else {
+        status.textContent = data.error; status.style.color = '#f87171';
+    }
+}
+
+async function sendPO(poId) {
+    if (!confirm('Email this PO to the supplier?')) return;
+    const res = await fetch(`/api/po/${poId}/send`, {method: 'POST'});
+    const data = await res.json();
+    if (data.ok) { alert('PO emailed to supplier'); location.reload(); }
+    else alert('Failed: ' + data.error);
+}
+
+async function receivePO(poId) {
+    if (!confirm('Mark as received? This will add quantities to inventory.')) return;
+    const res = await fetch(`/api/po/${poId}/receive`, {method: 'POST'});
+    const data = await res.json();
+    if (data.ok) { alert('PO received — inventory updated'); location.reload(); }
+    else alert('Failed: ' + (data.error || 'Unknown error'));
+}
+
+async function cancelPO(poId) {
+    if (!confirm('Cancel this PO?')) return;
+    const res = await fetch(`/api/po/${poId}/cancel`, {method: 'POST'});
+    const data = await res.json();
+    if (data.ok) location.reload();
+}
+</script>
+{% endblock %}

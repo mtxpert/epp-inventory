@@ -9,7 +9,8 @@ from flask import Flask, render_template, jsonify, request, redirect, url_for, f
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_mail import Mail
 from flask_apscheduler import APScheduler
-from models import db, User, Component, Kit, KitComponent, InventoryLog, ShopifyOrder
+from models import (db, User, Component, Kit, KitComponent, InventoryLog, ShopifyOrder,
+                     Supplier, SupplierComponent, PurchaseOrder, PurchaseOrderLine)
 
 mail = Mail()
 scheduler = APScheduler()
@@ -92,6 +93,30 @@ def create_app():
             if kit and kit_info.get('retail_price') and (not kit.retail_price):
                 kit.retail_price = kit_info['retail_price']
         db.session.commit()
+        # Seed suppliers if none exist
+        if not Supplier.query.first():
+            suppliers_data = [
+                {'name': 'R and I', 'email': 'elena@rimetal.com', 'contact_name': 'Elena',
+                 'notes': 'Intake heat shields', 'parts': ['IN-HEAT']},
+                {'name': 'Performance Tube Bending', 'email': 'mike@rsmetals.us', 'contact_name': 'Mike',
+                 'notes': 'All pipes', 'category': 'pipes'},
+                {'name': 'R-EP Auto Parts', 'email': 'repautoparts@r-ep.com', 'contact_name': '',
+                 'notes': 'All hoses/couplers', 'category': 'couplers'},
+            ]
+            for sd in suppliers_data:
+                s = Supplier(name=sd['name'], email=sd['email'],
+                             contact_name=sd.get('contact_name', ''), notes=sd.get('notes', ''))
+                db.session.add(s)
+                db.session.flush()
+                if 'parts' in sd:
+                    for pn in sd['parts']:
+                        comp = Component.query.filter_by(part_number=pn).first()
+                        if comp:
+                            db.session.add(SupplierComponent(supplier_id=s.id, component_id=comp.id))
+                elif 'category' in sd:
+                    for comp in Component.query.filter_by(category=sd['category']).all():
+                        db.session.add(SupplierComponent(supplier_id=s.id, component_id=comp.id))
+            db.session.commit()
         # Create default admin if no users exist
         if not User.query.first():
             admin = User(email='info@ecopowerparts.com', name='Mike', role='admin')
@@ -533,6 +558,120 @@ def register_routes(app):
         db.session.delete(kit)
         db.session.commit()
         return jsonify({'ok': True})
+
+    # ── Purchase Orders ──────────────────────────────────────────
+
+    @app.route('/orders')
+    @login_required
+    def purchase_orders():
+        suppliers = Supplier.query.order_by(Supplier.name).all()
+        pos = PurchaseOrder.query.order_by(PurchaseOrder.created_at.desc()).all()
+        return render_template('purchase_orders.html', suppliers=suppliers, purchase_orders=pos)
+
+    @app.route('/api/po/create', methods=['POST'])
+    @login_required
+    def create_po():
+        data = request.get_json()
+        supplier_id = data.get('supplier_id')
+        supplier = Supplier.query.get(supplier_id)
+        if not supplier:
+            return jsonify({'error': 'Supplier not found'}), 404
+
+        # Generate PO number
+        count = PurchaseOrder.query.count() + 1
+        po_number = f"EPP-PO-{count:04d}"
+
+        po = PurchaseOrder(
+            po_number=po_number, supplier_id=supplier_id,
+            notes=data.get('notes', ''), created_by=current_user.id
+        )
+        db.session.add(po)
+        db.session.flush()
+
+        for line in data.get('lines', []):
+            comp = Component.query.filter_by(part_number=line['part_number']).first()
+            if comp:
+                pol = PurchaseOrderLine(
+                    po_id=po.id, component_id=comp.id,
+                    qty=int(line['qty']), unit_cost=float(line.get('unit_cost', 0))
+                )
+                db.session.add(pol)
+
+        db.session.commit()
+        return jsonify({'ok': True, 'po_id': po.id, 'po_number': po_number})
+
+    @app.route('/api/po/<int:po_id>/send', methods=['POST'])
+    @login_required
+    def send_po(po_id):
+        from flask_mail import Message
+        po = PurchaseOrder.query.get_or_404(po_id)
+
+        body = f"Purchase Order: {po.po_number}\n"
+        body += f"Date: {po.created_at.strftime('%Y-%m-%d')}\n"
+        body += f"From: EcoPowerParts\n"
+        body += "=" * 50 + "\n\n"
+        body += f"{'Part Number':<15} {'Description':<40} {'Qty':>6}\n"
+        body += "-" * 65 + "\n"
+        for line in po.lines:
+            body += f"{line.component.part_number:<15} {line.component.name:<40} {line.qty:>6}\n"
+        body += "-" * 65 + "\n"
+        if po.notes:
+            body += f"\nNotes: {po.notes}\n"
+        body += f"\nPlease confirm receipt of this order.\nThank you,\nEcoPowerParts\n"
+
+        try:
+            msg = Message(
+                subject=f"[EPP] Purchase Order {po.po_number}",
+                recipients=[po.supplier.email],
+                body=body
+            )
+            mail.send(msg)
+            po.status = 'sent'
+            po.sent_at = datetime.now(timezone.utc)
+            db.session.commit()
+            return jsonify({'ok': True})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/po/<int:po_id>/receive', methods=['POST'])
+    @login_required
+    def receive_po(po_id):
+        po = PurchaseOrder.query.get_or_404(po_id)
+        po.status = 'received'
+        po.received_at = datetime.now(timezone.utc)
+        # Add received quantities to inventory
+        for line in po.lines:
+            line.component.qty += line.qty
+            log = InventoryLog(
+                component_id=line.component_id, qty_change=line.qty,
+                reason=f"PO {po.po_number} received", user_id=current_user.id
+            )
+            db.session.add(log)
+        db.session.commit()
+        return jsonify({'ok': True})
+
+    @app.route('/api/po/<int:po_id>/cancel', methods=['POST'])
+    @login_required
+    def cancel_po(po_id):
+        po = PurchaseOrder.query.get_or_404(po_id)
+        po.status = 'cancelled'
+        db.session.commit()
+        return jsonify({'ok': True})
+
+    @app.route('/api/supplier/<int:supplier_id>/components')
+    @login_required
+    def supplier_components(supplier_id):
+        supplier = Supplier.query.get_or_404(supplier_id)
+        parts = []
+        for sc in supplier.components:
+            c = sc.component
+            parts.append({
+                'part_number': c.part_number, 'name': c.name,
+                'qty': c.qty, 'reorder_threshold': c.reorder_threshold,
+                'unit_cost': sc.unit_cost,
+                'needs_reorder': c.qty <= c.reorder_threshold
+            })
+        return jsonify(parts)
 
     # ── Shopify Webhook ──────────────────────────────────────────
 

@@ -73,6 +73,62 @@ class InventoryLog(db.Model):
     user = db.relationship('User')
 
 
+class Supplier(db.Model):
+    __tablename__ = 'suppliers'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    email = db.Column(db.String(120), nullable=False)
+    contact_name = db.Column(db.String(80), default='')
+    notes = db.Column(db.Text, default='')
+
+    components = db.relationship('SupplierComponent', back_populates='supplier')
+    purchase_orders = db.relationship('PurchaseOrder', back_populates='supplier')
+
+
+class SupplierComponent(db.Model):
+    __tablename__ = 'supplier_components'
+    id = db.Column(db.Integer, primary_key=True)
+    supplier_id = db.Column(db.Integer, db.ForeignKey('suppliers.id'), nullable=False)
+    component_id = db.Column(db.Integer, db.ForeignKey('components.id'), nullable=False)
+    unit_cost = db.Column(db.Float, default=0)
+
+    supplier = db.relationship('Supplier', back_populates='components')
+    component = db.relationship('Component')
+
+
+class PurchaseOrder(db.Model):
+    __tablename__ = 'purchase_orders'
+    id = db.Column(db.Integer, primary_key=True)
+    po_number = db.Column(db.String(30), unique=True, nullable=False)
+    supplier_id = db.Column(db.Integer, db.ForeignKey('suppliers.id'), nullable=False)
+    status = db.Column(db.String(20), default='draft')  # draft, sent, received, cancelled
+    notes = db.Column(db.Text, default='')
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sent_at = db.Column(db.DateTime)
+    received_at = db.Column(db.DateTime)
+
+    supplier = db.relationship('Supplier', back_populates='purchase_orders')
+    creator = db.relationship('User')
+    lines = db.relationship('PurchaseOrderLine', back_populates='purchase_order', cascade='all, delete-orphan')
+
+    @property
+    def total(self):
+        return sum((l.qty * (l.unit_cost or 0)) for l in self.lines)
+
+
+class PurchaseOrderLine(db.Model):
+    __tablename__ = 'purchase_order_lines'
+    id = db.Column(db.Integer, primary_key=True)
+    po_id = db.Column(db.Integer, db.ForeignKey('purchase_orders.id'), nullable=False)
+    component_id = db.Column(db.Integer, db.ForeignKey('components.id'), nullable=False)
+    qty = db.Column(db.Integer, nullable=False)
+    unit_cost = db.Column(db.Float, default=0)
+
+    purchase_order = db.relationship('PurchaseOrder', back_populates='lines')
+    component = db.relationship('Component')
+
+
 class ShopifyOrder(db.Model):
     __tablename__ = 'shopify_orders'
     id = db.Column(db.Integer, primary_key=True)
