@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """EPP Inventory Manager — Cloud-deployed inventory & BOM system."""
 import os
+import io
+import csv
 import json
 from datetime import datetime, timezone
-from flask import Flask, render_template, jsonify, request, redirect, url_for, flash
+from flask import Flask, render_template, jsonify, request, redirect, url_for, flash, Response
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_mail import Mail
 from flask_apscheduler import APScheduler
@@ -220,14 +222,15 @@ def register_routes(app):
 
         min_buildable = min(kit_buildable.values()) if kit_buildable else 0
 
-        # Group components by category
-        categories = {}
+        # Group components by category (ordered)
+        cat_order = ['pipes', 'couplers', 'clamps', 'misc']
         cat_labels = {'pipes': 'Pipes', 'couplers': 'Silicone Hoses & Couplers', 'clamps': 'Clamps', 'misc': 'Misc / Hardware'}
-        for c in components:
-            cat = cat_labels.get(c.category, c.category)
-            if cat not in categories:
-                categories[cat] = []
-            categories[cat].append(c)
+        categories = {}
+        for cat_key in cat_order:
+            label = cat_labels.get(cat_key, cat_key)
+            cat_comps = [c for c in components if c.category == cat_key]
+            if cat_comps:
+                categories[label] = cat_comps
 
         # Build "used in" map
         used_in = {}
@@ -309,6 +312,117 @@ def register_routes(app):
         from shopify_sync import sync_recent_orders
         result = sync_recent_orders(hours=24)
         return jsonify(result)
+
+    # ── CSV Export ─────────────────────────────────────────────
+
+    @app.route('/api/export-csv')
+    @login_required
+    def export_csv():
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['Part Number', 'Name', 'Category', 'Old PN', 'Qty', 'Reorder At', 'Status'])
+        components = Component.query.order_by(Component.category, Component.part_number).all()
+        for c in components:
+            status = 'OUT OF STOCK' if c.qty <= 0 else 'Low' if c.qty <= c.reorder_threshold else 'OK'
+            writer.writerow([c.part_number, c.name, c.category, c.old_pn, c.qty, c.reorder_threshold, status])
+        output.seek(0)
+        return Response(
+            output.getvalue(),
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename=epp-inventory-{datetime.now().strftime("%Y%m%d")}.csv'}
+        )
+
+    # ── Build Kit (manual deduction) ──────────────────────────
+
+    @app.route('/api/build-kit', methods=['POST'])
+    @login_required
+    def build_kit():
+        data = request.get_json()
+        kit_id = data.get('kit_id')
+        qty = int(data.get('qty', 1))
+        kit = Kit.query.get(kit_id)
+        if not kit:
+            return jsonify({'error': 'Kit not found'}), 404
+
+        # Check if buildable
+        for kc in kit.components:
+            needed = kc.quantity * qty
+            if kc.component.qty < needed:
+                return jsonify({
+                    'error': f'Not enough {kc.component.part_number}: need {needed}, have {kc.component.qty}'
+                }), 400
+
+        # Deduct
+        deductions = []
+        for kc in kit.components:
+            total_deduct = kc.quantity * qty
+            kc.component.qty -= total_deduct
+            log = InventoryLog(
+                component_id=kc.component_id,
+                qty_change=-total_deduct,
+                reason=f"Manual build: {kit.name} x{qty}",
+                user_id=current_user.id
+            )
+            db.session.add(log)
+            deductions.append({
+                'part': kc.component.part_number,
+                'deducted': total_deduct,
+                'remaining': kc.component.qty
+            })
+
+        db.session.commit()
+        return jsonify({'ok': True, 'deductions': deductions})
+
+    # ── Component CRUD (admin) ────────────────────────────────
+
+    @app.route('/api/component', methods=['POST'])
+    @login_required
+    def add_component():
+        if current_user.role != 'admin':
+            return jsonify({'error': 'Admin only'}), 403
+        data = request.get_json()
+        pn = data.get('part_number', '').strip().upper()
+        name = data.get('name', '').strip()
+        category = data.get('category', 'misc').strip().lower()
+        qty = int(data.get('qty', 0))
+        threshold = int(data.get('reorder_threshold', 10))
+
+        if not pn or not name:
+            return jsonify({'error': 'Part number and name required'}), 400
+        if Component.query.filter_by(part_number=pn).first():
+            return jsonify({'error': 'Part number already exists'}), 400
+
+        comp = Component(
+            part_number=pn, name=name, category=category,
+            qty=qty, reorder_threshold=threshold
+        )
+        db.session.add(comp)
+        log = InventoryLog(
+            component_id=None, qty_change=qty,
+            reason=f"New component added: {pn}", user_id=current_user.id
+        )
+        db.session.flush()
+        log.component_id = comp.id
+        db.session.add(log)
+        db.session.commit()
+        return jsonify({'ok': True, 'id': comp.id})
+
+    @app.route('/api/component/<part_number>', methods=['DELETE'])
+    @login_required
+    def delete_component(part_number):
+        if current_user.role != 'admin':
+            return jsonify({'error': 'Admin only'}), 403
+        comp = Component.query.filter_by(part_number=part_number).first()
+        if not comp:
+            return jsonify({'error': 'Not found'}), 404
+        # Check if used in any kit
+        if comp.kit_components:
+            kit_names = [kc.kit.name for kc in comp.kit_components]
+            return jsonify({'error': f'Used in kits: {", ".join(kit_names)}'}), 400
+        InventoryLog.query.filter_by(component_id=comp.id).delete()
+        db.session.delete(comp)
+        db.session.commit()
+        return jsonify({'ok': True})
 
     # ── Kit CRUD ─────────────────────────────────────────────────
 

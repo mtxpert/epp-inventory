@@ -27,8 +27,9 @@
 </div>
 
 <!-- Action Bar -->
-<div style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">
+<div style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; align-items: center;">
     <button class="btn btn-primary" onclick="syncOrders()" id="syncBtn">Sync Shopify Orders</button>
+    <a href="/api/export-csv" class="btn" style="background: #475569; color: #fff;">Export CSV</a>
     <button class="btn btn-success" onclick="location.reload()">Refresh</button>
     <div id="syncStatus" style="font-size: 13px; color: #64748b; display: flex; align-items: center;"></div>
 </div>
@@ -44,6 +45,38 @@
 
 <!-- Tab: Component Inventory -->
 <div id="tab-inventory" class="tab-content active">
+    {% if current_user.role == 'admin' %}
+    <details style="margin-bottom: 16px;">
+        <summary style="cursor: pointer; color: #4fc3f7; font-size: 14px; padding: 8px 0;">+ Add New Component</summary>
+        <div class="card" style="margin-top: 8px;">
+            <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: end;" id="addCompForm">
+                <div>
+                    <label style="font-size: 12px; color: #64748b; display: block; margin-bottom: 4px;">Part Number</label>
+                    <input type="text" id="new-pn" placeholder="e.g. BOLT-M8" style="padding: 8px 12px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 13px; width: 120px;">
+                </div>
+                <div>
+                    <label style="font-size: 12px; color: #64748b; display: block; margin-bottom: 4px;">Name</label>
+                    <input type="text" id="new-name" placeholder="e.g. M8 Hex Bolt" style="padding: 8px 12px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 13px; width: 200px;">
+                </div>
+                <div>
+                    <label style="font-size: 12px; color: #64748b; display: block; margin-bottom: 4px;">Category</label>
+                    <select id="new-cat" style="padding: 8px 12px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 13px;">
+                        <option value="pipes">Pipes</option>
+                        <option value="couplers">Couplers</option>
+                        <option value="clamps">Clamps</option>
+                        <option value="misc" selected>Misc</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size: 12px; color: #64748b; display: block; margin-bottom: 4px;">Qty</label>
+                    <input type="number" id="new-qty" value="0" min="0" style="padding: 8px 12px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 13px; width: 70px;">
+                </div>
+                <button class="btn btn-success" onclick="addComponent()">Add</button>
+                <span id="addCompStatus" style="font-size: 13px;"></span>
+            </div>
+        </div>
+    </details>
+    {% endif %}
     <input type="text" class="search-box" placeholder="Search components..." oninput="filterComponents(this.value)">
     {% for cat_name, cat_components in categories.items() %}
     <div class="section">
@@ -87,7 +120,7 @@
         <h2>Kit Definitions (BOMs)</h2>
         <table>
             <thead>
-                <tr><th>Kit Name</th><th>Shopify ID</th><th>Variant</th><th>Components</th><th>Buildable</th></tr>
+                <tr><th>Kit Name</th><th>Shopify ID</th><th>Variant</th><th>Components</th><th>Buildable</th><th>Build</th></tr>
             </thead>
             <tbody>
                 {% for kit in kits %}
@@ -104,6 +137,12 @@
                     </td>
                     <td class="qty-cell {{ 'qty-critical' if kit_buildable[kit.id] <= 0 else 'qty-low' if kit_buildable[kit.id] < 5 else 'qty-ok' }}">
                         {{ kit_buildable[kit.id] }}
+                    </td>
+                    <td>
+                        <div class="adjust-group">
+                            <input type="number" id="build-{{ kit.id }}" value="1" min="1" style="width: 40px;">
+                            <button class="set-btn" onclick="buildKit({{ kit.id }}, '{{ kit.name }}')" {{ 'disabled' if kit_buildable[kit.id] <= 0 }}>Build</button>
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}
@@ -264,6 +303,44 @@ async function setThreshold(pn, threshold) {
 function updateQtyStyle(pn, qty) {
     const cell = document.getElementById('qty-' + pn).parentElement;
     cell.className = 'qty-cell ' + (qty <= 0 ? 'qty-critical' : qty <= 10 ? 'qty-low' : 'qty-ok');
+}
+
+async function buildKit(kitId, kitName) {
+    const qty = parseInt(document.getElementById('build-' + kitId).value) || 1;
+    if (!confirm(`Build ${qty}x ${kitName}? This will deduct all components.`)) return;
+    try {
+        const res = await fetch('/api/build-kit', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({kit_id: kitId, qty: qty})
+        });
+        const data = await res.json();
+        if (data.error) {
+            alert('Build failed: ' + data.error);
+        } else {
+            alert(`Built ${qty}x ${kitName}. ${data.deductions.length} components deducted.`);
+            location.reload();
+        }
+    } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function addComponent() {
+    const pn = document.getElementById('new-pn').value.trim();
+    const name = document.getElementById('new-name').value.trim();
+    const category = document.getElementById('new-cat').value;
+    const qty = parseInt(document.getElementById('new-qty').value) || 0;
+    const status = document.getElementById('addCompStatus');
+    if (!pn || !name) { status.textContent = 'Part # and name required'; status.style.color = '#f87171'; return; }
+    try {
+        const res = await fetch('/api/component', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({part_number: pn, name: name, category: category, qty: qty})
+        });
+        const data = await res.json();
+        if (data.error) { status.textContent = data.error; status.style.color = '#f87171'; }
+        else { status.textContent = 'Added!'; status.style.color = '#4ade80'; setTimeout(() => location.reload(), 800); }
+    } catch(e) { status.textContent = 'Error: ' + e.message; status.style.color = '#f87171'; }
 }
 
 async function syncOrders() {
