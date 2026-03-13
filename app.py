@@ -138,6 +138,22 @@ def register_routes(app):
         logout_user()
         return redirect(url_for('login'))
 
+    # ── Password Change ─────────────────────────────────────────
+
+    @app.route('/change-password', methods=['POST'])
+    @login_required
+    def change_password():
+        data = request.get_json()
+        old_pw = data.get('old_password', '')
+        new_pw = data.get('new_password', '')
+        if not current_user.check_password(old_pw):
+            return jsonify({'error': 'Current password incorrect'}), 400
+        if len(new_pw) < 8:
+            return jsonify({'error': 'Password must be at least 8 characters'}), 400
+        current_user.set_password(new_pw)
+        db.session.commit()
+        return jsonify({'ok': True})
+
     # ── Admin Routes ─────────────────────────────────────────────
 
     @app.route('/admin/users')
