@@ -37,10 +37,16 @@
             </thead>
             <tbody id="po-parts-body"></tbody>
         </table>
-        <div style="margin-top: 16px; display: flex; gap: 12px; align-items: center;">
+        <div style="margin-top: 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
             <button class="btn btn-primary" onclick="createPO()">Create PO</button>
             <button class="btn" style="background: #475569; color: #fff;" onclick="autoFillReorder()">Auto-Fill Low Stock</button>
+            <button class="btn" style="background: #7c3aed; color: #fff;" onclick="sendRFQ()">Send RFQ (25/50/100)</button>
             <span id="po-status" style="font-size: 13px;"></span>
+        </div>
+        <!-- RFQ Preview -->
+        <div id="rfq-preview" style="display: none; margin-top: 16px; background: #0f172a; border: 1px solid #374151; border-radius: 8px; padding: 16px;">
+            <h3 style="font-size: 14px; color: #4fc3f7; margin-bottom: 8px;">RFQ Email Preview</h3>
+            <pre id="rfq-body" style="font-size: 12px; color: #94a3b8; white-space: pre-wrap; font-family: monospace;"></pre>
         </div>
     </div>
 </div>
@@ -168,8 +174,11 @@ async function sendPO(poId) {
     if (!confirm('Email this PO to the supplier?')) return;
     const res = await fetch(`/api/po/${poId}/send`, {method: 'POST'});
     const data = await res.json();
-    if (data.ok) { alert('PO emailed to supplier'); location.reload(); }
-    else alert('Failed: ' + data.error);
+    if (data.ok) {
+        document.getElementById('rfq-preview').style.display = 'block';
+        document.getElementById('rfq-body').textContent = data.email_body;
+        setTimeout(() => location.reload(), 3000);
+    } else alert('Failed: ' + data.error);
 }
 
 async function receivePO(poId) {
@@ -185,6 +194,33 @@ async function cancelPO(poId) {
     const res = await fetch(`/api/po/${poId}/cancel`, {method: 'POST'});
     const data = await res.json();
     if (data.ok) location.reload();
+}
+
+async function sendRFQ() {
+    const supplierId = document.getElementById('po-supplier').value;
+    const status = document.getElementById('po-status');
+    if (!supplierId) { status.textContent = 'Select a supplier first'; status.style.color = '#f87171'; return; }
+
+    const parts = [];
+    document.querySelectorAll('.po-check:checked').forEach(cb => parts.push(cb.dataset.pn));
+    if (!parts.length) { status.textContent = 'Select parts for RFQ'; status.style.color = '#f87171'; return; }
+
+    if (!confirm(`Send RFQ for ${parts.length} parts to supplier? (pricing at 25/50/100 qty)`)) return;
+
+    const res = await fetch('/api/po/rfq', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({supplier_id: parseInt(supplierId), part_numbers: parts, qty_breaks: [25, 50, 100]})
+    });
+    const data = await res.json();
+    if (data.ok) {
+        status.textContent = 'RFQ sent!';
+        status.style.color = '#4ade80';
+        document.getElementById('rfq-preview').style.display = 'block';
+        document.getElementById('rfq-body').textContent = data.email_body;
+    } else {
+        status.textContent = 'Failed: ' + data.error;
+        status.style.color = '#f87171';
+    }
 }
 </script>
 {% endblock %}

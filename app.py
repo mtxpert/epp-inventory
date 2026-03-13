@@ -629,7 +629,7 @@ def register_routes(app):
             po.status = 'sent'
             po.sent_at = datetime.now(timezone.utc)
             db.session.commit()
-            return jsonify({'ok': True})
+            return jsonify({'ok': True, 'email_body': body})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
@@ -657,6 +657,64 @@ def register_routes(app):
         po.status = 'cancelled'
         db.session.commit()
         return jsonify({'ok': True})
+
+    @app.route('/api/po/rfq', methods=['POST'])
+    @login_required
+    def send_rfq():
+        """Send RFQ email to supplier requesting pricing at multiple qty breaks."""
+        from flask_mail import Message
+        data = request.get_json()
+        supplier_id = data.get('supplier_id')
+        supplier = Supplier.query.get(supplier_id)
+        if not supplier:
+            return jsonify({'error': 'Supplier not found'}), 404
+
+        qty_breaks = data.get('qty_breaks', [25, 50, 100])
+        part_numbers = data.get('part_numbers', [])
+
+        parts = []
+        for pn in part_numbers:
+            comp = Component.query.filter_by(part_number=pn).first()
+            if comp:
+                parts.append(comp)
+
+        if not parts:
+            return jsonify({'error': 'No parts selected'}), 400
+
+        body = f"Request for Quote\n"
+        body += f"From: EcoPowerParts\n"
+        body += f"Date: {datetime.now().strftime('%Y-%m-%d')}\n"
+        body += "=" * 60 + "\n\n"
+        body += f"Hi{(' ' + supplier.contact_name) if supplier.contact_name else ''},\n\n"
+        body += "We'd like to get pricing on the following parts at the quantities listed below.\n"
+        body += "Please reply with your best pricing and lead time for each.\n\n"
+
+        # Header
+        qty_header = "".join(f"{'Qty ' + str(q):>12}" for q in qty_breaks)
+        body += f"{'Part Number':<15} {'Description':<35}{qty_header}\n"
+        body += "-" * (50 + 12 * len(qty_breaks)) + "\n"
+
+        for comp in parts:
+            qty_cols = "".join(f"{'________':>12}" for _ in qty_breaks)
+            body += f"{comp.part_number:<15} {comp.name:<35}{qty_cols}\n"
+
+        body += "-" * (50 + 12 * len(qty_breaks)) + "\n"
+        body += "\nPlease include:\n"
+        body += "- Unit price at each quantity\n"
+        body += "- Lead time\n"
+        body += "- Any minimum order requirements\n"
+        body += f"\nThank you,\nMike Bambic\nEcoPowerParts\ninfo@ecopowerparts.com\n"
+
+        try:
+            msg = Message(
+                subject=f"[EPP] Request for Quote — {len(parts)} parts",
+                recipients=[supplier.email],
+                body=body
+            )
+            mail.send(msg)
+            return jsonify({'ok': True, 'email_body': body})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
 
     @app.route('/api/supplier/<int:supplier_id>/components')
     @login_required
