@@ -95,6 +95,11 @@ def create_app():
         if 'retail_price' not in kit_cols:
             db.session.execute(db.text("ALTER TABLE kits ADD COLUMN retail_price FLOAT DEFAULT 0"))
             db.session.commit()
+        # Add unit_cost column to components if missing (must be before any Component queries)
+        comp_cols = [c['name'] for c in inspector.get_columns('components')]
+        if 'unit_cost' not in comp_cols:
+            db.session.execute(db.text("ALTER TABLE components ADD COLUMN unit_cost FLOAT DEFAULT 0"))
+            db.session.commit()
         from seed_data import seed_database
         seed_database()
         # Update kit prices from seed data
@@ -129,11 +134,6 @@ def create_app():
                     for comp in Component.query.filter_by(category=sd['category']).all():
                         if comp.part_number not in exclude:
                             db.session.add(SupplierComponent(supplier_id=s.id, component_id=comp.id))
-            db.session.commit()
-        # Add unit_cost column to components if missing
-        comp_cols = [c['name'] for c in inspector.get_columns('components')]
-        if 'unit_cost' not in comp_cols:
-            db.session.execute(db.text("ALTER TABLE components ADD COLUMN unit_cost FLOAT DEFAULT 0"))
             db.session.commit()
         # Fix: remove IN-HEAT from PTB (belongs to R&I only)
         ptb = Supplier.query.filter_by(name='Performance Tube Bending').first()
