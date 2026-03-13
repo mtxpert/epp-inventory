@@ -76,12 +76,13 @@ def create_app():
 
     with app.app_context():
         db.create_all()
-        # Add retail_price column if missing (no-op if already exists)
-        try:
+        # Add retail_price column if missing
+        from sqlalchemy import inspect as sa_inspect
+        inspector = sa_inspect(db.engine)
+        kit_cols = [c['name'] for c in inspector.get_columns('kits')]
+        if 'retail_price' not in kit_cols:
             db.session.execute(db.text("ALTER TABLE kits ADD COLUMN retail_price FLOAT DEFAULT 0"))
             db.session.commit()
-        except Exception:
-            db.session.rollback()
         from seed_data import seed_database
         seed_database()
         # Update kit prices from seed data
