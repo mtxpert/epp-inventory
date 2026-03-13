@@ -71,50 +71,50 @@ COMPONENTS = {
 
 KITS = {
     "hot_pipes_sho": {
-        "name": "SHO/Flex/MKT Hot Pipes", "shopify_id": "7786267443355",
+        "name": "SHO/Flex/MKT Hot Pipes", "shopify_id": "7786267443355", "retail_price": 625,
         "components": {"HP-NMD": 1, "HP-SHRT": 1, "HP-LNG": 1, "SH-0-51": 1, "SH-0-63": 1, "SH-0-76": 1,
                        "SR-0-38-51": 1, "SS-0-51": 1, "XH-CP024": 1, "CLAMP-150": 2, "CLAMP-200": 6, "CLAMP-250": 2, "CLAMP-300": 2}
     },
     "hot_pipes_explorer": {
-        "name": "Explorer Sport Hot Pipes", "shopify_id": "7786267082907",
+        "name": "Explorer Sport Hot Pipes", "shopify_id": "7786267082907", "retail_price": 625,
         "components": {"HP-NMD": 1, "HP-SHRT": 1, "HP-LNG": 1, "SH-0-51": 1, "SH-0-76": 1, "SR-0-38-51": 1,
                        "SS-0-51": 1, "EXP-45-63": 1, "CLAMP-150": 1, "CLAMP-200": 5, "CLAMP-250": 2, "CLAMP-300": 2}
     },
     "nmd": {
-        "name": "Noisemaker Delete Pipe", "shopify_id": "7786267050139",
+        "name": "Noisemaker Delete Pipe", "shopify_id": "7786267050139", "retail_price": 235,
         "components": {"HP-NMD": 1, "SH-0-63": 1, "SH-0-76": 1, "CLAMP-250": 2, "CLAMP-300": 2}
     },
     "nmd_upgrade": {
-        "name": "NMD to Hot Pipe Upgrade Kit", "shopify_id": "7786267312283",
+        "name": "NMD to Hot Pipe Upgrade Kit", "shopify_id": "7786267312283", "retail_price": 500,
         "components": {"HP-SHRT": 1, "HP-LNG": 1, "SH-0-51": 1, "SR-0-38-51": 1, "SS-0-51": 1, "XH-CP024": 1,
                        "CLAMP-150": 2, "CLAMP-200": 6}
     },
     "explorer_nmd": {
-        "name": "Explorer Sport NMD", "shopify_id": "8261715722395",
+        "name": "Explorer Sport NMD", "shopify_id": "8261715722395", "retail_price": 235,
         "components": {"HP-NMD": 1, "SH-0-76": 1, "EXP-45-63": 1, "CLAMP-250": 2, "CLAMP-300": 2}
     },
     "intake_stock_hose": {
-        "name": "SHO/Flex/Explorer Intake (Stock Hose)", "shopify_id": "7786267213979", "shopify_variant": "stock",
+        "name": "SHO/Flex/Explorer Intake (Stock Hose)", "shopify_id": "7786267213979", "shopify_variant": "stock", "retail_price": 660,
         "components": {"IN-HEAT": 1, "IN-S": 1, "IN-90": 1, "IN-STK": 1, "SH-0-63": 1, "SRE-90-45-63": 1,
                        "CLAMP-175": 1, "CLAMP-200": 1, "CLAMP-250": 5, "FILTER": 1}
     },
     "intake_custom_hose": {
-        "name": "SHO/Flex/Explorer Intake (Custom Hose)", "shopify_id": "7786267213979", "shopify_variant": "custom",
+        "name": "SHO/Flex/Explorer Intake (Custom Hose)", "shopify_id": "7786267213979", "shopify_variant": "custom", "retail_price": 700,
         "components": {"IN-HEAT": 1, "IN-S": 1, "IN-90": 1, "IN-CUST": 1, "SH-0-63": 1, "SRE-90-45-63": 1,
                        "XH-CP023": 1, "CLAMP-175": 1, "CLAMP-200": 1, "CLAMP-250": 6, "FILTER": 1}
     },
     "fusion_intake": {
-        "name": "Fusion Sport 2.7L Intake Pipes", "shopify_id": "7786267181211",
+        "name": "Fusion Sport 2.7L Intake Pipes", "shopify_id": "7786267181211", "retail_price": 385,
         "components": {"FU-I-PRT": 1, "FU-I-RCIRC": 1, "FU-I-PLN": 1, "SR-0-63-76": 2, "SRE-90-51-63": 2,
                        "SS-0-63": 1, "CLAMP-200": 2, "CLAMP-250": 6, "CLAMP-300": 2}
     },
     "fusion_charge": {
-        "name": "Fusion Sport 2.7L Charge Pipes", "shopify_id": "7805538828443",
+        "name": "Fusion Sport 2.7L Charge Pipes", "shopify_id": "7805538828443", "retail_price": 600,
         "components": {"FU-C-LNG": 1, "FU-C-MID90": 1, "FU-C-SML": 1, "FU-C-MCRO": 1, "FU-C-TBDY": 1,
                        "SR-0-48-51": 2, "SRE-90-63-70": 1, "SS-0-51": 4, "CLAMP-200": 12, "CLAMP-250": 3, "CLAMP-275": 1}
     },
     "f150_intake": {
-        "name": "F150 3.5L Intake Tubes", "shopify_id": None,
+        "name": "F150 3.5L Intake Tubes", "shopify_id": None, "retail_price": 860,
         "components": {"TR-I-BG": 1, "TR-I-LNG": 1, "SR-0-45-51": 1, "SR-0-45-63": 1, "CLAMP-175": 2, "CLAMP-200": 1, "CLAMP-250": 1}
     }
 }
@@ -146,7 +146,8 @@ def seed_database():
             slug=slug,
             name=kit_info['name'],
             shopify_id=kit_info.get('shopify_id'),
-            shopify_variant=kit_info.get('shopify_variant')
+            shopify_variant=kit_info.get('shopify_variant'),
+            retail_price=kit_info.get('retail_price', 0)
         )
         db.session.add(kit)
         db.session.flush()

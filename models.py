@@ -43,6 +43,7 @@ class Kit(db.Model):
     name = db.Column(db.String(120), nullable=False)
     shopify_id = db.Column(db.String(30))
     shopify_variant = db.Column(db.String(30))
+    retail_price = db.Column(db.Float, default=0)
 
     components = db.relationship('KitComponent', back_populates='kit', cascade='all, delete-orphan')
 

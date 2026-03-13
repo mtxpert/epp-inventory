@@ -222,6 +222,13 @@ def register_routes(app):
 
         min_buildable = min(kit_buildable.values()) if kit_buildable else 0
 
+        # Calculate total retail value of buildable inventory
+        total_retail_value = 0
+        for kit in kits:
+            buildable = kit_buildable.get(kit.id, 0)
+            if buildable > 0 and kit.retail_price:
+                total_retail_value += buildable * kit.retail_price
+
         # Group components by category (ordered)
         cat_order = ['pipes', 'couplers', 'clamps', 'misc']
         cat_labels = {'pipes': 'Pipes', 'couplers': 'Silicone Hoses & Couplers', 'clamps': 'Clamps', 'misc': 'Misc / Hardware'}
@@ -247,6 +254,7 @@ def register_routes(app):
             components=components, kits=kits, categories=categories,
             low_stock=low_stock, total_stock=total_stock,
             kit_buildable=kit_buildable, min_buildable=min_buildable,
+            total_retail_value=total_retail_value,
             used_in=used_in, recent_orders=recent_orders, recent_logs=recent_logs)
 
     # ── Inventory API ────────────────────────────────────────────
@@ -513,6 +521,23 @@ def register_routes(app):
                 send_low_stock_alert(low)
 
         return jsonify(result), 200
+
+    # ── Update Kit Prices (one-time migration) ──────────────────
+
+    @app.route('/api/update-prices', methods=['POST'])
+    @login_required
+    def update_prices():
+        if current_user.role != 'admin':
+            return jsonify({'error': 'Admin only'}), 403
+        from seed_data import KITS
+        updated = []
+        for slug, kit_info in KITS.items():
+            kit = Kit.query.filter_by(slug=slug).first()
+            if kit and kit_info.get('retail_price'):
+                kit.retail_price = kit_info['retail_price']
+                updated.append(f"{kit.name}: ${kit.retail_price}")
+        db.session.commit()
+        return jsonify({'ok': True, 'updated': updated})
 
     # ── Health Check ─────────────────────────────────────────────
 
