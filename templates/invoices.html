@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+{% block title %}Invoices & COGS — EPP Inventory{% endblock %}
+{% block content %}
+
+<h1 style="font-size: 22px; margin-bottom: 24px;">Invoices & Cost Analysis</h1>
+
+<!-- Margin Analysis -->
+<div class="card" style="margin-bottom: 24px;">
+    <h2 style="font-size: 16px; color: #4fc3f7; margin-bottom: 16px;">Kit Margin Analysis (Cost vs Retail)</h2>
+    {% set has_costs = margin_data|selectattr('cost', 'gt', 0)|list|length > 0 %}
+    {% if has_costs %}
+    <table>
+        <thead>
+            <tr><th>Kit</th><th>Retail</th><th>Cost</th><th>Margin</th><th>Margin %</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+            {% for m in margin_data %}
+            <tr>
+                <td><strong>{{ m.kit.name }}</strong></td>
+                <td>${{ "{:,.0f}".format(m.kit.retail_price or 0) }}</td>
+                <td>{% if m.cost > 0 %}${{ "{:,.2f}".format(m.cost) }}{% else %}<span style="color:#64748b;">No cost data</span>{% endif %}</td>
+                <td>{% if m.margin is not none %}
+                    <span style="color: {{ '#4ade80' if m.margin > 0 else '#f87171' }}; font-weight: 600;">${{ "{:,.2f}".format(m.margin) }}</span>
+                    {% else %}—{% endif %}
+                </td>
+                <td>{% if m.margin_pct is not none %}
+                    <span style="color: {{ '#4ade80' if m.margin_pct > 30 else '#fbbf24' if m.margin_pct > 15 else '#f87171' }}; font-weight: 600;">{{ m.margin_pct }}%</span>
+                    {% else %}—{% endif %}
+                </td>
+                <td>
+                    {% if m.margin_pct is not none %}
+                        {% if m.margin_pct > 40 %}<span style="color:#4ade80;">Healthy</span>
+                        {% elif m.margin_pct > 25 %}<span style="color:#fbbf24;">OK</span>
+                        {% elif m.margin_pct > 0 %}<span style="color:#f87171;">Underpriced?</span>
+                        {% else %}<span style="color:#f87171; font-weight:700;">Losing Money</span>
+                        {% endif %}
+                    {% else %}<span style="color:#64748b;">Need invoice data</span>{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: #64748b; padding: 12px;">Upload supplier invoices below to see cost vs retail margin analysis. Once you enter costs, this table will show whether you're undercharging.</p>
+    {% endif %}
+</div>
+
+<!-- Inventory Snapshots -->
+<div class="card" style="margin-bottom: 24px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h2 style="font-size: 16px; color: #4fc3f7; margin: 0;">Inventory Valuations</h2>
+        <div style="display: flex; gap: 8px; align-items: center;">
+            <span style="font-size: 11px; color: #64748b;">Auto-emails Sean@askwold.com on 12/31</span>
+            <button class="btn btn-primary" onclick="generateSnapshot()">Generate Now</button>
+        </div>
+    </div>
+    <div id="snapshot-status" style="display: none; margin-bottom: 12px; padding: 12px; background: #14532d; border: 1px solid #166534; border-radius: 8px; font-size: 13px; color: #86efac;"></div>
+    {% if snapshots %}
+    <table>
+        <thead>
+            <tr><th>Date</th><th>Retail Value</th><th>Cost Value</th><th>Est. Margin</th><th>Emailed To</th></tr>
+        </thead>
+        <tbody>
+            {% for s in snapshots %}
+            <tr>
+                <td><strong>{{ s.snapshot_date.strftime('%Y-%m-%d') }}</strong></td>
+                <td style="color: #4fc3f7; font-weight: 600;">${{ "{:,.2f}".format(s.total_retail_value) }}</td>
+                <td>${{ "{:,.2f}".format(s.total_cost_value) }}</td>
+                <td style="color: #4ade80; font-weight: 600;">${{ "{:,.2f}".format(s.total_retail_value - s.total_cost_value) }}</td>
+                <td style="font-size: 12px; color: #64748b;">{{ s.emailed_to or '—' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: #64748b; padding: 12px;">No snapshots yet. Generate one or wait for the automatic 12/31 snapshot.</p>
+    {% endif %}
+</div>
+
+<!-- Upload Invoice -->
+<div class="card" style="margin-bottom: 24px;">
+    <h2 style="font-size: 16px; color: #4fc3f7; margin-bottom: 16px;">Upload Supplier Invoice</h2>
+    <form action="/api/invoice/create" method="POST" enctype="multipart/form-data" id="invoice-form">
+        <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px;">
+            <div>
+                <label style="font-size: 12px; color: #64748b; display: block; margin-bottom: 4px;">Supplier</label>
+                <select name="supplier_id" required style="padding: 8px 12px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 13px; min-width: 200px;">
+                    <option value="">Select...</option>
+                    {% for s in suppliers %}
+                    <option value="{{ s.id }}">{{ s.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label style="font-size: 12px; color: #64748b; display: block; margin-bottom: 4px;">Invoice #</label>
+                <input type="text" name="invoice_number" required placeholder="INV-001" style="padding: 8px 12px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 13px; width: 150px;">
+            </div>
+            <div>
+                <label style="font-size: 12px; color: #64748b; display: block; margin-bottom: 4px;">Invoice Date</label>
+                <input type="date" name="invoice_date" required style="padding: 8px 12px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 13px;">
+            </div>
+            <div>
+                <label style="font-size: 12px; color: #64748b; display: block; margin-bottom: 4px;">PDF/Image (optional)</label>
+                <input type="file" name="invoice_file" accept=".pdf,.png,.jpg,.jpeg" style="padding: 6px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 12px;">
+            </div>
+        </div>
+        <div>
+            <label style="font-size: 12px; color: #64748b; display: block; margin-bottom: 4px;">Notes</label>
+            <input type="text" name="notes" placeholder="Optional notes..." style="width: 100%; padding: 8px 12px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 13px; margin-bottom: 16px;">
+        </div>
+
+        <h3 style="font-size: 14px; color: #94a3b8; margin-bottom: 12px;">Line Items</h3>
+        <table id="invoice-lines">
+            <thead>
+                <tr>
+                    <th>Part #</th>
+                    <th>Qty</th>
+                    <th>Unit Cost ($)</th>
+                    <th>Line Total</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="invoice-lines-body">
+                <tr class="invoice-line" data-idx="0">
+                    <td>
+                        <select name="line_pn_0" class="line-pn" style="padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 4px; color: #e0e0e0; font-size: 13px; min-width: 180px;">
+                            <option value="">Select part...</option>
+                            {% for c in components %}
+                            <option value="{{ c.part_number }}">{{ c.part_number }} — {{ c.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </td>
+                    <td><input type="number" name="line_qty_0" class="line-qty" value="0" min="0" onchange="calcLineTotal(this)" style="width: 70px; padding: 6px 8px; background: #1f2937; border: 1px solid #374151; border-radius: 4px; color: #e0e0e0; font-size: 13px; text-align: center;"></td>
+                    <td><input type="number" name="line_cost_0" class="line-cost" value="0" min="0" step="0.01" onchange="calcLineTotal(this)" style="width: 90px; padding: 6px 8px; background: #1f2937; border: 1px solid #374151; border-radius: 4px; color: #e0e0e0; font-size: 13px; text-align: center;"></td>
+                    <td class="line-total" style="font-weight: 600; color: #4fc3f7;">$0.00</td>
+                    <td></td>
+                </tr>
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td colspan="3" style="text-align: right; font-weight: 600;">Invoice Total:</td>
+                    <td id="invoice-total" style="font-weight: 700; color: #4fc3f7; font-size: 15px;">$0.00</td>
+                    <td></td>
+                </tr>
+            </tfoot>
+        </table>
+        <div style="margin-top: 12px; display: flex; gap: 12px;">
+            <button type="button" class="btn" style="background: #475569; color: #fff;" onclick="addInvoiceLine()">+ Add Line</button>
+            <button type="submit" class="btn btn-primary">Save Invoice</button>
+        </div>
+    </form>
+</div>
+
+<!-- Invoice History -->
+<div class="card">
+    <h2 style="font-size: 16px; color: #4fc3f7; margin-bottom: 16px;">Invoice History</h2>
+    {% if invoices %}
+    <table>
+        <thead>
+            <tr><th>Invoice #</th><th>Supplier</th><th>Date</th><th>Items</th><th>Total</th><th>File</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+            {% for inv in invoices %}
+            <tr>
+                <td><strong>{{ inv.invoice_number }}</strong></td>
+                <td>{{ inv.supplier.name }}</td>
+                <td>{{ inv.invoice_date.strftime('%Y-%m-%d') }}</td>
+                <td style="font-size: 12px; color: #94a3b8;">
+                    {% for line in inv.lines %}
+                    {{ line.component.part_number }} x{{ line.qty }} @ ${{ "%.2f"|format(line.unit_cost) }}{% if not loop.last %}, {% endif %}
+                    {% endfor %}
+                </td>
+                <td style="font-weight: 600; color: #4fc3f7;">${{ "{:,.2f}".format(inv.total_amount or 0) }}</td>
+                <td>{% if inv.file_name %}<a href="/api/invoice/{{ inv.id }}/file" target="_blank" style="font-size: 12px;">{{ inv.file_name }}</a>{% else %}—{% endif %}</td>
+                <td>
+                    {% if current_user.role == 'admin' %}
+                    <button class="btn btn-danger btn-sm" onclick="deleteInvoice({{ inv.id }})">Delete</button>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: #64748b; padding: 12px;">No invoices uploaded yet.</p>
+    {% endif %}
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+let lineCount = 1;
+
+function addInvoiceLine() {
+    const idx = lineCount++;
+    const tbody = document.getElementById('invoice-lines-body');
+    const tr = document.createElement('tr');
+    tr.className = 'invoice-line';
+    tr.dataset.idx = idx;
+    tr.innerHTML = `
+        <td>
+            <select name="line_pn_${idx}" class="line-pn" style="padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 4px; color: #e0e0e0; font-size: 13px; min-width: 180px;">
+                <option value="">Select part...</option>
+                ${document.querySelector('.line-pn').innerHTML.split('<option').slice(1).map(o => '<option' + o).join('')}
+            </select>
+        </td>
+        <td><input type="number" name="line_qty_${idx}" class="line-qty" value="0" min="0" onchange="calcLineTotal(this)" style="width: 70px; padding: 6px 8px; background: #1f2937; border: 1px solid #374151; border-radius: 4px; color: #e0e0e0; font-size: 13px; text-align: center;"></td>
+        <td><input type="number" name="line_cost_${idx}" class="line-cost" value="0" min="0" step="0.01" onchange="calcLineTotal(this)" style="width: 90px; padding: 6px 8px; background: #1f2937; border: 1px solid #374151; border-radius: 4px; color: #e0e0e0; font-size: 13px; text-align: center;"></td>
+        <td class="line-total" style="font-weight: 600; color: #4fc3f7;">$0.00</td>
+        <td><button type="button" class="btn btn-danger btn-sm" onclick="this.closest('tr').remove(); updateInvoiceTotal();">x</button></td>
+    `;
+    tbody.appendChild(tr);
+}
+
+function calcLineTotal(el) {
+    const row = el.closest('tr');
+    const qty = parseFloat(row.querySelector('.line-qty').value) || 0;
+    const cost = parseFloat(row.querySelector('.line-cost').value) || 0;
+    row.querySelector('.line-total').textContent = '$' + (qty * cost).toFixed(2);
+    updateInvoiceTotal();
+}
+
+function updateInvoiceTotal() {
+    let total = 0;
+    document.querySelectorAll('.invoice-line').forEach(row => {
+        const qty = parseFloat(row.querySelector('.line-qty').value) || 0;
+        const cost = parseFloat(row.querySelector('.line-cost').value) || 0;
+        total += qty * cost;
+    });
+    document.getElementById('invoice-total').textContent = '$' + total.toFixed(2);
+}
+
+async function generateSnapshot() {
+    const status = document.getElementById('snapshot-status');
+    status.style.display = 'block';
+    status.textContent = 'Generating snapshot and emailing...';
+    status.style.background = '#1e3a5f';
+    status.style.borderColor = '#1e40af';
+    status.style.color = '#93c5fd';
+
+    const res = await fetch('/api/snapshot/generate', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({email_to: 'sean@askwold.com,info@ecopowerparts.com'})
+    });
+    const data = await res.json();
+    if (data.total_retail !== undefined) {
+        status.style.background = '#14532d';
+        status.style.borderColor = '#166534';
+        status.style.color = '#86efac';
+        status.innerHTML = `Snapshot saved! Retail: <strong>$${data.total_retail.toLocaleString()}</strong> | Cost: <strong>$${data.total_cost.toLocaleString()}</strong> — emailed to Sean & Mike`;
+        setTimeout(() => location.reload(), 2000);
+    } else {
+        status.textContent = 'Error: ' + (data.error || 'Unknown');
+        status.style.background = '#451a1a';
+        status.style.borderColor = '#7f1d1d';
+        status.style.color = '#fca5a5';
+    }
+}
+
+async function deleteInvoice(id) {
+    if (!confirm('Delete this invoice? Component costs will NOT be reverted.')) return;
+    const res = await fetch(`/api/invoice/${id}`, {method: 'DELETE'});
+    const data = await res.json();
+    if (data.ok) location.reload();
+    else alert('Error: ' + data.error);
+}
+</script>
+{% endblock %}

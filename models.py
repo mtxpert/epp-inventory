@@ -31,6 +31,7 @@ class Component(db.Model):
     old_pn = db.Column(db.String(30), default='')
     qty = db.Column(db.Integer, default=0)
     reorder_threshold = db.Column(db.Integer, default=10)
+    unit_cost = db.Column(db.Float, default=0)  # latest weighted average cost
 
     kit_components = db.relationship('KitComponent', back_populates='component')
     logs = db.relationship('InventoryLog', back_populates='component', order_by='InventoryLog.created_at.desc()')
@@ -127,6 +128,54 @@ class PurchaseOrderLine(db.Model):
 
     purchase_order = db.relationship('PurchaseOrder', back_populates='lines')
     component = db.relationship('Component')
+
+
+class InventorySnapshot(db.Model):
+    """Year-end inventory valuation snapshot for accounting."""
+    __tablename__ = 'inventory_snapshots'
+    id = db.Column(db.Integer, primary_key=True)
+    snapshot_date = db.Column(db.Date, nullable=False)
+    total_retail_value = db.Column(db.Float, default=0)
+    total_cost_value = db.Column(db.Float, default=0)
+    details_json = db.Column(db.Text)  # JSON: per-component breakdown
+    emailed_to = db.Column(db.String(200))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class Invoice(db.Model):
+    """Supplier invoice for COGS tracking."""
+    __tablename__ = 'invoices'
+    id = db.Column(db.Integer, primary_key=True)
+    supplier_id = db.Column(db.Integer, db.ForeignKey('suppliers.id'), nullable=False)
+    invoice_number = db.Column(db.String(50), nullable=False)
+    invoice_date = db.Column(db.Date, nullable=False)
+    total_amount = db.Column(db.Float, default=0)
+    notes = db.Column(db.Text, default='')
+    file_data = db.Column(db.Text)  # base64 encoded PDF/image
+    file_name = db.Column(db.String(200))
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    supplier = db.relationship('Supplier')
+    creator = db.relationship('User')
+    lines = db.relationship('InvoiceLine', back_populates='invoice', cascade='all, delete-orphan')
+
+
+class InvoiceLine(db.Model):
+    """Individual line item on a supplier invoice."""
+    __tablename__ = 'invoice_lines'
+    id = db.Column(db.Integer, primary_key=True)
+    invoice_id = db.Column(db.Integer, db.ForeignKey('invoices.id'), nullable=False)
+    component_id = db.Column(db.Integer, db.ForeignKey('components.id'), nullable=False)
+    qty = db.Column(db.Integer, nullable=False)
+    unit_cost = db.Column(db.Float, nullable=False)
+
+    invoice = db.relationship('Invoice', back_populates='lines')
+    component = db.relationship('Component')
+
+    @property
+    def line_total(self):
+        return self.qty * self.unit_cost
 
 
 class ShopifyOrder(db.Model):

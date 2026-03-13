@@ -10,7 +10,8 @@ from flask_login import LoginManager, login_user, logout_user, login_required, c
 from flask_mail import Mail
 from flask_apscheduler import APScheduler
 from models import (db, User, Component, Kit, KitComponent, InventoryLog, ShopifyOrder,
-                     Supplier, SupplierComponent, PurchaseOrder, PurchaseOrderLine)
+                     Supplier, SupplierComponent, PurchaseOrder, PurchaseOrderLine,
+                     InventorySnapshot, Invoice, InvoiceLine)
 
 mail = Mail()
 scheduler = APScheduler()
@@ -66,6 +67,16 @@ def create_app():
             'hour': 8,
             'minute': 0,
             'misfire_grace_time': 3600
+        },
+        {
+            'id': 'year_end_inventory',
+            'func': 'app:scheduled_year_end_snapshot',
+            'trigger': 'cron',
+            'month': 12,
+            'day': 31,
+            'hour': 23,
+            'minute': 30,
+            'misfire_grace_time': 86400
         }
     ]
 
@@ -119,6 +130,11 @@ def create_app():
                         if comp.part_number not in exclude:
                             db.session.add(SupplierComponent(supplier_id=s.id, component_id=comp.id))
             db.session.commit()
+        # Add unit_cost column to components if missing
+        comp_cols = [c['name'] for c in inspector.get_columns('components')]
+        if 'unit_cost' not in comp_cols:
+            db.session.execute(db.text("ALTER TABLE components ADD COLUMN unit_cost FLOAT DEFAULT 0"))
+            db.session.commit()
         # Fix: remove IN-HEAT from PTB (belongs to R&I only)
         ptb = Supplier.query.filter_by(name='Performance Tube Bending').first()
         in_heat = Component.query.filter_by(part_number='IN-HEAT').first()
@@ -162,6 +178,124 @@ def scheduled_stock_alert():
         if low:
             send_low_stock_alert(low)
             app.logger.info(f"Daily alert: {len(low)} low stock items")
+
+
+def generate_inventory_snapshot(email_to=None):
+    """Generate inventory valuation snapshot and optionally email it."""
+    from flask_mail import Message
+    import json
+    from datetime import date
+
+    components = Component.query.all()
+    kits = Kit.query.all()
+
+    # Build kit cost: sum of component unit_costs * qty per kit
+    details = []
+    total_retail = 0
+    total_cost = 0
+
+    for comp in components:
+        # Get cost from latest invoice or supplier_component
+        cost = comp.unit_cost or 0
+        if not cost:
+            sc = SupplierComponent.query.filter_by(component_id=comp.id).first()
+            if sc:
+                cost = sc.unit_cost or 0
+
+        comp_value_cost = comp.qty * cost
+        total_cost += comp_value_cost
+
+        details.append({
+            'part_number': comp.part_number,
+            'name': comp.name,
+            'qty': comp.qty,
+            'unit_cost': cost,
+            'total_cost': round(comp_value_cost, 2),
+        })
+
+    # Calculate retail value (pipe-limited buildable * retail price)
+    pipe_stock = {c.id: c.qty for c in components if c.category == 'pipes'}
+    kit_priority = {
+        'hot_pipes_sho': 1, 'intake_stock_hose': 2, 'intake_custom_hose': 3,
+        'hot_pipes_explorer': 4, 'fusion_intake': 5, 'fusion_charge': 6,
+        'f150_intake': 7, 'nmd_upgrade': 8, 'nmd': 9, 'explorer_nmd': 10,
+    }
+    kits_by_priority = sorted(kits, key=lambda k: kit_priority.get(k.slug, 99))
+    kit_retail_details = []
+    for kit in kits_by_priority:
+        pipe_parts = [kc for kc in kit.components if kc.component.category == 'pipes']
+        if not pipe_parts:
+            continue
+        max_build = min(pipe_stock.get(kc.component_id, 0) // kc.quantity for kc in pipe_parts)
+        for kc in pipe_parts:
+            pipe_stock[kc.component_id] = pipe_stock.get(kc.component_id, 0) - (kc.quantity * max_build)
+        kit_value = max_build * (kit.retail_price or 0)
+        total_retail += kit_value
+        if max_build > 0:
+            kit_retail_details.append({
+                'kit': kit.name, 'buildable': max_build,
+                'retail_price': kit.retail_price, 'total': round(kit_value, 2)
+            })
+
+    snapshot_date = date.today()
+    snap = InventorySnapshot(
+        snapshot_date=snapshot_date,
+        total_retail_value=round(total_retail, 2),
+        total_cost_value=round(total_cost, 2),
+        details_json=json.dumps({
+            'components': details,
+            'kits': kit_retail_details,
+        }),
+        emailed_to=email_to or ''
+    )
+    db.session.add(snap)
+    db.session.commit()
+
+    # Build email
+    body = f"EPP INVENTORY VALUATION — {snapshot_date.strftime('%B %d, %Y')}\n"
+    body += "=" * 60 + "\n\n"
+    body += f"Total Retail Value (pipe-limited kits): ${total_retail:,.2f}\n"
+    body += f"Total Cost Basis (component inventory):  ${total_cost:,.2f}\n"
+    body += f"Estimated Gross Margin:                  ${total_retail - total_cost:,.2f}\n\n"
+
+    body += "KIT BUILDABLE INVENTORY (retail)\n"
+    body += "-" * 55 + "\n"
+    body += f"{'Kit':<35} {'Qty':>5} {'Price':>8} {'Total':>10}\n"
+    body += "-" * 55 + "\n"
+    for kd in kit_retail_details:
+        body += f"{kd['kit']:<35} {kd['buildable']:>5} ${kd['retail_price']:>7,.0f} ${kd['total']:>9,.2f}\n"
+    body += "-" * 55 + "\n"
+    body += f"{'TOTAL':<35} {'':>5} {'':>8} ${total_retail:>9,.2f}\n\n"
+
+    body += "COMPONENT INVENTORY (at cost)\n"
+    body += "-" * 65 + "\n"
+    body += f"{'Part #':<15} {'Name':<30} {'Qty':>5} {'Cost':>8} {'Total':>10}\n"
+    body += "-" * 65 + "\n"
+    for d in sorted(details, key=lambda x: x['part_number']):
+        if d['qty'] > 0:
+            body += f"{d['part_number']:<15} {d['name'][:30]:<30} {d['qty']:>5} ${d['unit_cost']:>7.2f} ${d['total_cost']:>9.2f}\n"
+    body += "-" * 65 + "\n"
+    body += f"{'TOTAL':<15} {'':>30} {'':>5} {'':>8} ${total_cost:>9,.2f}\n"
+
+    if email_to:
+        try:
+            msg = Message(
+                subject=f"[EPP] Inventory Valuation — {snapshot_date.strftime('%Y-%m-%d')}",
+                recipients=[e.strip() for e in email_to.split(',')],
+                body=body
+            )
+            mail.send(msg)
+        except Exception as e:
+            app.logger.error(f"Failed to email inventory snapshot: {e}")
+
+    return {'snapshot_id': snap.id, 'total_retail': total_retail, 'total_cost': total_cost, 'email_body': body}
+
+
+def scheduled_year_end_snapshot():
+    """12/31 at 11:30pm — snapshot inventory and email to accountant."""
+    with app.app_context():
+        result = generate_inventory_snapshot(email_to='sean@askwold.com,info@ecopowerparts.com')
+        app.logger.info(f"Year-end snapshot: retail=${result['total_retail']:,.2f}, cost=${result['total_cost']:,.2f}")
 
 
 def register_routes(app):
@@ -783,6 +917,148 @@ def register_routes(app):
             info['part_number'] = pn
             result.append(info)
         return jsonify(result)
+
+    # ── Invoices & COGS ─────────────────────────────────────────
+
+    @app.route('/invoices')
+    @login_required
+    def invoices_page():
+        suppliers = Supplier.query.order_by(Supplier.name).all()
+        invoices = Invoice.query.order_by(Invoice.invoice_date.desc()).all()
+        components = Component.query.order_by(Component.part_number).all()
+        snapshots = InventorySnapshot.query.order_by(InventorySnapshot.snapshot_date.desc()).limit(10).all()
+
+        # Margin analysis: kit retail vs component cost
+        kits = Kit.query.all()
+        margin_data = []
+        for kit in kits:
+            kit_cost = 0
+            for kc in kit.components:
+                comp_cost = kc.component.unit_cost or 0
+                if not comp_cost:
+                    sc = SupplierComponent.query.filter_by(component_id=kc.component_id).first()
+                    comp_cost = sc.unit_cost if sc else 0
+                kit_cost += kc.quantity * comp_cost
+            margin = (kit.retail_price or 0) - kit_cost if kit_cost > 0 else None
+            margin_pct = (margin / (kit.retail_price or 1) * 100) if margin is not None and kit.retail_price else None
+            margin_data.append({
+                'kit': kit, 'cost': round(kit_cost, 2),
+                'margin': round(margin, 2) if margin is not None else None,
+                'margin_pct': round(margin_pct, 1) if margin_pct is not None else None,
+            })
+
+        return render_template('invoices.html',
+            suppliers=suppliers, invoices=invoices, components=components,
+            snapshots=snapshots, margin_data=margin_data)
+
+    @app.route('/api/invoice/create', methods=['POST'])
+    @login_required
+    def create_invoice():
+        import base64
+        data = request.form
+        supplier_id = data.get('supplier_id')
+        invoice_number = data.get('invoice_number', '').strip()
+        invoice_date = data.get('invoice_date')
+        notes = data.get('notes', '')
+
+        if not supplier_id or not invoice_number or not invoice_date:
+            flash('Supplier, invoice number, and date are required', 'error')
+            return redirect(url_for('invoices_page'))
+
+        inv = Invoice(
+            supplier_id=int(supplier_id),
+            invoice_number=invoice_number,
+            invoice_date=datetime.strptime(invoice_date, '%Y-%m-%d').date(),
+            notes=notes,
+            created_by=current_user.id
+        )
+
+        # Handle file upload
+        file = request.files.get('invoice_file')
+        if file and file.filename:
+            inv.file_name = file.filename
+            inv.file_data = base64.b64encode(file.read()).decode('utf-8')
+
+        db.session.add(inv)
+        db.session.flush()
+
+        # Parse line items from form
+        line_idx = 0
+        total = 0
+        while True:
+            pn = data.get(f'line_pn_{line_idx}')
+            if pn is None:
+                break
+            qty = int(data.get(f'line_qty_{line_idx}', 0) or 0)
+            unit_cost = float(data.get(f'line_cost_{line_idx}', 0) or 0)
+            if pn and qty > 0 and unit_cost > 0:
+                comp = Component.query.filter_by(part_number=pn).first()
+                if comp:
+                    line = InvoiceLine(
+                        invoice_id=inv.id, component_id=comp.id,
+                        qty=qty, unit_cost=unit_cost
+                    )
+                    db.session.add(line)
+                    total += qty * unit_cost
+                    # Update component's weighted average cost
+                    if comp.unit_cost and comp.qty > 0:
+                        # Weighted average: (old_cost * old_qty + new_cost * new_qty) / (old_qty + new_qty)
+                        old_total = comp.unit_cost * comp.qty
+                        comp.unit_cost = round((old_total + unit_cost * qty) / (comp.qty + qty), 4)
+                    else:
+                        comp.unit_cost = unit_cost
+            line_idx += 1
+
+        inv.total_amount = round(total, 2)
+        db.session.commit()
+        flash(f'Invoice {invoice_number} created — {line_idx} lines, ${total:,.2f} total', 'success')
+        return redirect(url_for('invoices_page'))
+
+    @app.route('/api/invoice/<int:inv_id>/file')
+    @login_required
+    def download_invoice_file(inv_id):
+        import base64
+        inv = Invoice.query.get_or_404(inv_id)
+        if not inv.file_data:
+            flash('No file attached', 'error')
+            return redirect(url_for('invoices_page'))
+        data = base64.b64decode(inv.file_data)
+        mime = 'application/pdf' if inv.file_name.lower().endswith('.pdf') else 'application/octet-stream'
+        return Response(data, mimetype=mime,
+            headers={'Content-Disposition': f'inline; filename="{inv.file_name}"'})
+
+    @app.route('/api/invoice/<int:inv_id>', methods=['DELETE'])
+    @login_required
+    def delete_invoice(inv_id):
+        if current_user.role != 'admin':
+            return jsonify({'error': 'Admin only'}), 403
+        inv = Invoice.query.get_or_404(inv_id)
+        db.session.delete(inv)
+        db.session.commit()
+        return jsonify({'ok': True})
+
+    @app.route('/api/snapshot/generate', methods=['POST'])
+    @login_required
+    def generate_snapshot():
+        if current_user.role != 'admin':
+            return jsonify({'error': 'Admin only'}), 403
+        email_to = request.json.get('email_to', 'sean@askwold.com,info@ecopowerparts.com')
+        result = generate_inventory_snapshot(email_to=email_to)
+        return jsonify(result)
+
+    @app.route('/api/component/cost', methods=['POST'])
+    @login_required
+    def update_component_cost():
+        """Manually update a component's unit cost."""
+        data = request.get_json()
+        pn = data.get('part_number')
+        cost = float(data.get('unit_cost', 0))
+        comp = Component.query.filter_by(part_number=pn).first()
+        if not comp:
+            return jsonify({'error': 'Component not found'}), 404
+        comp.unit_cost = cost
+        db.session.commit()
+        return jsonify({'ok': True, 'unit_cost': comp.unit_cost})
 
     # ── Shopify Webhook ──────────────────────────────────────────
 
