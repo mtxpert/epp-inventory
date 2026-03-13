@@ -28,6 +28,10 @@ def create_app():
     app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-change-me')
     app.config['SQLALCHEMY_DATABASE_URI'] = database_url
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'pool_pre_ping': True,
+        'pool_recycle': 300,
+    }
     app.config['SHOPIFY_TOKEN'] = os.environ.get('SHOPIFY_TOKEN', '')
     app.config['SHOPIFY_STORE'] = os.environ.get('SHOPIFY_STORE', 'edf236-3.myshopify.com')
     app.config['SHOPIFY_WEBHOOK_SECRET'] = os.environ.get('SHOPIFY_WEBHOOK_SECRET', '')
