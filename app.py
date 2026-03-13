@@ -99,7 +99,7 @@ def create_app():
                 {'name': 'R and I', 'email': 'elena@rimetal.com', 'contact_name': 'Elena',
                  'notes': 'Intake heat shields', 'parts': ['IN-HEAT']},
                 {'name': 'Performance Tube Bending', 'email': 'mike@rsmetals.us', 'contact_name': 'Mike',
-                 'notes': 'All pipes', 'category': 'pipes'},
+                 'notes': 'All pipes', 'category': 'pipes', 'exclude_pns': ['IN-HEAT']},
                 {'name': 'R-EP Auto Parts', 'email': 'repautoparts@r-ep.com', 'contact_name': '',
                  'notes': 'All hoses/couplers', 'category': 'couplers'},
             ]
@@ -114,9 +114,19 @@ def create_app():
                         if comp:
                             db.session.add(SupplierComponent(supplier_id=s.id, component_id=comp.id))
                 elif 'category' in sd:
+                    exclude = set(sd.get('exclude_pns', []))
                     for comp in Component.query.filter_by(category=sd['category']).all():
-                        db.session.add(SupplierComponent(supplier_id=s.id, component_id=comp.id))
+                        if comp.part_number not in exclude:
+                            db.session.add(SupplierComponent(supplier_id=s.id, component_id=comp.id))
             db.session.commit()
+        # Fix: remove IN-HEAT from PTB (belongs to R&I only)
+        ptb = Supplier.query.filter_by(name='Performance Tube Bending').first()
+        in_heat = Component.query.filter_by(part_number='IN-HEAT').first()
+        if ptb and in_heat:
+            bad = SupplierComponent.query.filter_by(supplier_id=ptb.id, component_id=in_heat.id).first()
+            if bad:
+                db.session.delete(bad)
+                db.session.commit()
         # Create default admin if no users exist
         if not User.query.first():
             admin = User(email='info@ecopowerparts.com', name='Mike', role='admin')
@@ -734,10 +744,16 @@ def register_routes(app):
     @app.route('/api/kit-part-calc', methods=['POST'])
     @login_required
     def kit_part_calc():
-        """Calculate total parts needed for a given number of kits, filtered by category."""
+        """Calculate total parts needed for a given number of kits, filtered by supplier."""
         data = request.get_json()
         kit_qtys = data.get('kit_qtys', {})  # {kit_slug: qty}
-        category = data.get('category', 'couplers')  # couplers or pipes
+        supplier_id = data.get('supplier_id')
+
+        # Get supplier's part numbers
+        supplier_pns = set()
+        if supplier_id:
+            for sc in SupplierComponent.query.filter_by(supplier_id=supplier_id).all():
+                supplier_pns.add(sc.component_id)
 
         totals = {}
         for slug, qty in kit_qtys.items():
@@ -747,7 +763,8 @@ def register_routes(app):
             if not kit:
                 continue
             for kc in kit.components:
-                if kc.component.category != category:
+                # Filter: only parts this supplier provides
+                if supplier_id and kc.component_id not in supplier_pns:
                     continue
                 pn = kc.component.part_number
                 if pn not in totals:
@@ -764,7 +781,6 @@ def register_routes(app):
         result = []
         for pn, info in sorted(totals.items()):
             info['part_number'] = pn
-            info['to_order'] = max(0, info['total_needed'] - info['in_stock'])
             result.append(info)
         return jsonify(result)
 

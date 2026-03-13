@@ -294,20 +294,19 @@ async function calcKitHoses() {
         return;
     }
 
+    const supplierId = document.getElementById('po-supplier').value;
     const res = await fetch('/api/kit-part-calc', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({kit_qtys: kitQtys, category: 'couplers'})
+        body: JSON.stringify({kit_qtys: kitQtys, supplier_id: parseInt(supplierId)})
     });
     const data = await res.json();
 
-    let html = '<table><thead><tr><th>Part #</th><th>Name</th><th>Need</th><th>In Stock</th><th>Order</th><th>Breakdown</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>Part #</th><th>Name</th><th>Total Needed</th><th>Breakdown</th></tr></thead><tbody>';
     data.forEach(p => {
         html += `<tr>
             <td><strong>${p.part_number}</strong></td>
             <td>${p.name}</td>
             <td style="color:#4fc3f7; font-weight:600;">${p.total_needed}</td>
-            <td class="qty-cell ${p.in_stock <= 0 ? 'qty-critical' : p.in_stock <= p.total_needed ? 'qty-low' : 'qty-ok'}">${p.in_stock}</td>
-            <td style="color:${p.to_order > 0 ? '#f87171' : '#4ade80'}; font-weight:600;">${p.to_order}</td>
             <td style="font-size:11px; color:#64748b;">${p.breakdown.join(', ')}</td>
         </tr>`;
     });
@@ -342,20 +341,19 @@ async function calcKitPipes() {
         return;
     }
 
+    const supplierId = document.getElementById('po-supplier').value;
     const res = await fetch('/api/kit-part-calc', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({kit_qtys: kitQtys, category: 'pipes'})
+        body: JSON.stringify({kit_qtys: kitQtys, supplier_id: parseInt(supplierId)})
     });
     const data = await res.json();
 
-    let html = '<table><thead><tr><th>Part #</th><th>Name</th><th>Need</th><th>In Stock</th><th>Order</th><th>Breakdown</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>Part #</th><th>Name</th><th>Total Needed</th><th>Breakdown</th></tr></thead><tbody>';
     data.forEach(p => {
         html += `<tr>
             <td><strong>${p.part_number}</strong></td>
             <td>${p.name}</td>
             <td style="color:#4fc3f7; font-weight:600;">${p.total_needed}</td>
-            <td class="qty-cell ${p.in_stock <= 0 ? 'qty-critical' : p.in_stock <= p.total_needed ? 'qty-low' : 'qty-ok'}">${p.in_stock}</td>
-            <td style="color:${p.to_order > 0 ? '#f87171' : '#4ade80'}; font-weight:600;">${p.to_order}</td>
             <td style="font-size:11px; color:#64748b;">${p.breakdown.join(', ')}</td>
         </tr>`;
     });
@@ -370,9 +368,9 @@ function applyKitPipesToPO() {
     window._kitPipeData.forEach(p => {
         const check = document.querySelector(`.po-check[data-pn="${p.part_number}"]`);
         const qtyInput = document.querySelector(`.po-qty[data-pn="${p.part_number}"]`);
-        if (check && qtyInput && p.to_order > 0) {
+        if (check && qtyInput && p.total_needed > 0) {
             check.checked = true;
-            qtyInput.value = p.to_order;
+            qtyInput.value = p.total_needed;
         }
     });
     document.getElementById('po-status').textContent = 'Kit pipe quantities applied to PO';
@@ -385,9 +383,9 @@ function applyKitHosesToPO() {
     window._kitHoseData.forEach(p => {
         const check = document.querySelector(`.po-check[data-pn="${p.part_number}"]`);
         const qtyInput = document.querySelector(`.po-qty[data-pn="${p.part_number}"]`);
-        if (check && qtyInput && p.to_order > 0) {
+        if (check && qtyInput && p.total_needed > 0) {
             check.checked = true;
-            qtyInput.value = p.to_order;
+            qtyInput.value = p.total_needed;
         }
     });
     document.getElementById('po-status').textContent = 'Kit hose quantities applied to PO';
