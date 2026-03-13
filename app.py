@@ -76,8 +76,21 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        # Add retail_price column if missing (no-op if already exists)
+        try:
+            db.session.execute(db.text("ALTER TABLE kits ADD COLUMN retail_price FLOAT DEFAULT 0"))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
         from seed_data import seed_database
         seed_database()
+        # Update kit prices from seed data
+        from seed_data import KITS
+        for slug, kit_info in KITS.items():
+            kit = Kit.query.filter_by(slug=slug).first()
+            if kit and kit_info.get('retail_price') and (not kit.retail_price):
+                kit.retail_price = kit_info['retail_price']
+        db.session.commit()
         # Create default admin if no users exist
         if not User.query.first():
             admin = User(email='info@ecopowerparts.com', name='Mike', role='admin')
