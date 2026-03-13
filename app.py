@@ -731,14 +731,15 @@ def register_routes(app):
             })
         return jsonify(parts)
 
-    @app.route('/api/kit-hose-calc', methods=['POST'])
+    @app.route('/api/kit-part-calc', methods=['POST'])
     @login_required
-    def kit_hose_calc():
-        """Calculate total hoses needed for a given number of kits."""
+    def kit_part_calc():
+        """Calculate total parts needed for a given number of kits, filtered by category."""
         data = request.get_json()
         kit_qtys = data.get('kit_qtys', {})  # {kit_slug: qty}
+        category = data.get('category', 'couplers')  # couplers or pipes
 
-        totals = {}  # {part_number: {name, total_needed, in_stock, per_kit_breakdown}}
+        totals = {}
         for slug, qty in kit_qtys.items():
             if qty <= 0:
                 continue
@@ -746,7 +747,7 @@ def register_routes(app):
             if not kit:
                 continue
             for kc in kit.components:
-                if kc.component.category != 'couplers':
+                if kc.component.category != category:
                     continue
                 pn = kc.component.part_number
                 if pn not in totals:

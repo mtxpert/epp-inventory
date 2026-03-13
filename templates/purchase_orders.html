@@ -57,6 +57,45 @@
         <div id="kit-hose-result" style="margin-top: 12px;"></div>
     </div>
 
+    <!-- Kit-Based Pipe Calculator (shows for Performance Tube Bending) -->
+    <div id="kit-pipe-calc" style="display: none; margin-bottom: 20px;">
+        <h3 style="font-size: 14px; color: #4fc3f7; margin-bottom: 12px;">Order Pipes by Kit Quantity</h3>
+        <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px;">
+            <div>
+                <label style="font-size: 12px; color: #64748b;">SHO/Flex Hot Pipes</label>
+                <input type="number" id="pipe-hot_pipes_sho" value="0" min="0" class="pipe-qty-input" onchange="autoFillNMD()" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+            </div>
+            <div>
+                <label style="font-size: 12px; color: #64748b;">Extra NMD Pipes</label>
+                <input type="number" id="pipe-nmd" value="0" min="0" class="pipe-qty-input" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+                <span style="font-size: 10px; color: #fbbf24;">Auto: 2x hot pipes</span>
+            </div>
+            <div style="border-left: 1px solid #374151; padding-left: 16px;">
+                <label style="font-size: 12px; color: #64748b;">SHO Intake (Custom)</label>
+                <input type="number" id="pipe-intake_custom_hose" value="0" min="0" class="pipe-qty-input" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+            </div>
+            <div>
+                <label style="font-size: 12px; color: #64748b;">Stock Hose Add-on</label>
+                <input type="number" id="pipe-intake_stock_hose" value="0" min="0" class="pipe-qty-input" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+                <span style="font-size: 10px; color: #64748b;">IN-STK only</span>
+            </div>
+            <div style="border-left: 1px solid #374151; padding-left: 16px;">
+                <label style="font-size: 12px; color: #64748b;">Fusion Intake</label>
+                <input type="number" id="pipe-fusion_intake" value="0" min="0" class="pipe-qty-input" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+            </div>
+            <div>
+                <label style="font-size: 12px; color: #64748b;">Fusion Charge</label>
+                <input type="number" id="pipe-fusion_charge" value="0" min="0" class="pipe-qty-input" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+            </div>
+            <div>
+                <label style="font-size: 12px; color: #64748b;">F150 Intake</label>
+                <input type="number" id="pipe-f150_intake" value="0" min="0" class="pipe-qty-input" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+            </div>
+        </div>
+        <button class="btn btn-primary" onclick="calcKitPipes()">Calculate Pipes Needed</button>
+        <div id="kit-pipe-result" style="margin-top: 12px;"></div>
+    </div>
+
     <div id="po-parts" style="display: none;">
         <table>
             <thead>
@@ -146,9 +185,11 @@ async function loadSupplierParts() {
     const kitCalc = document.getElementById('kit-hose-calc');
     if (!supplierId) { partsDiv.style.display = 'none'; kitCalc.style.display = 'none'; return; }
 
-    // Show kit calculator for hose supplier (R-EP)
+    // Show kit calculators based on supplier
     const supplierName = sel.options[sel.selectedIndex].text;
+    const pipeCalc = document.getElementById('kit-pipe-calc');
     kitCalc.style.display = supplierName.includes('R-EP') ? 'block' : 'none';
+    pipeCalc.style.display = supplierName.includes('Performance') ? 'block' : 'none';
 
     const res = await fetch(`/api/supplier/${supplierId}/components`);
     supplierParts = await res.json();
@@ -253,9 +294,9 @@ async function calcKitHoses() {
         return;
     }
 
-    const res = await fetch('/api/kit-hose-calc', {
+    const res = await fetch('/api/kit-part-calc', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({kit_qtys: kitQtys})
+        body: JSON.stringify({kit_qtys: kitQtys, category: 'couplers'})
     });
     const data = await res.json();
 
@@ -276,6 +317,66 @@ async function calcKitHoses() {
 
     // Store for applying
     window._kitHoseData = data;
+}
+
+function autoFillNMD() {
+    const hotPipes = parseInt(document.getElementById('pipe-hot_pipes_sho').value) || 0;
+    document.getElementById('pipe-nmd').value = hotPipes;  // same as hot pipes = 2x total NMD
+}
+
+async function calcKitPipes() {
+    const kitQtys = {};
+    const hotPipes = parseInt(document.getElementById('pipe-hot_pipes_sho').value) || 0;
+    const extraNMD = parseInt(document.getElementById('pipe-nmd').value) || 0;
+
+    if (hotPipes > 0) kitQtys['hot_pipes_sho'] = hotPipes;
+    if (extraNMD > 0) kitQtys['nmd'] = extraNMD;
+
+    ['intake_custom_hose', 'intake_stock_hose', 'fusion_intake', 'fusion_charge', 'f150_intake'].forEach(slug => {
+        const val = parseInt(document.getElementById('pipe-' + slug).value) || 0;
+        if (val > 0) kitQtys[slug] = val;
+    });
+
+    if (!Object.keys(kitQtys).length) {
+        document.getElementById('kit-pipe-result').innerHTML = '<span style="color:#f87171;">Enter kit quantities above</span>';
+        return;
+    }
+
+    const res = await fetch('/api/kit-part-calc', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({kit_qtys: kitQtys, category: 'pipes'})
+    });
+    const data = await res.json();
+
+    let html = '<table><thead><tr><th>Part #</th><th>Name</th><th>Need</th><th>In Stock</th><th>Order</th><th>Breakdown</th></tr></thead><tbody>';
+    data.forEach(p => {
+        html += `<tr>
+            <td><strong>${p.part_number}</strong></td>
+            <td>${p.name}</td>
+            <td style="color:#4fc3f7; font-weight:600;">${p.total_needed}</td>
+            <td class="qty-cell ${p.in_stock <= 0 ? 'qty-critical' : p.in_stock <= p.total_needed ? 'qty-low' : 'qty-ok'}">${p.in_stock}</td>
+            <td style="color:${p.to_order > 0 ? '#f87171' : '#4ade80'}; font-weight:600;">${p.to_order}</td>
+            <td style="font-size:11px; color:#64748b;">${p.breakdown.join(', ')}</td>
+        </tr>`;
+    });
+    html += '</tbody></table>';
+    html += '<div style="margin-top:12px;"><button class="btn btn-primary" onclick="applyKitPipesToPO()">Apply to PO Below</button></div>';
+    document.getElementById('kit-pipe-result').innerHTML = html;
+    window._kitPipeData = data;
+}
+
+function applyKitPipesToPO() {
+    if (!window._kitPipeData) return;
+    window._kitPipeData.forEach(p => {
+        const check = document.querySelector(`.po-check[data-pn="${p.part_number}"]`);
+        const qtyInput = document.querySelector(`.po-qty[data-pn="${p.part_number}"]`);
+        if (check && qtyInput && p.to_order > 0) {
+            check.checked = true;
+            qtyInput.value = p.to_order;
+        }
+    });
+    document.getElementById('po-status').textContent = 'Kit pipe quantities applied to PO';
+    document.getElementById('po-status').style.color = '#4ade80';
 }
 
 function applyKitHosesToPO() {
