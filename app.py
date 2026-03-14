@@ -118,6 +118,8 @@ def create_app():
                  'notes': 'All pipes', 'category': 'pipes', 'exclude_pns': ['IN-HEAT']},
                 {'name': 'R-EP Auto Parts', 'email': 'repautoparts@r-ep.com', 'contact_name': '',
                  'notes': 'All hoses/couplers', 'category': 'couplers'},
+                {'name': 'Kevin Wolfe / Powill', 'email': 'kwolfe@powill.com', 'contact_name': 'Kevin',
+                 'notes': 'BOV mounts and MAP sensor mounts', 'parts': ['BOV-SHO', 'BOV-FUSION', 'MAP-SHO']},
             ]
             for sd in suppliers_data:
                 s = Supplier(name=sd['name'], email=sd['email'],
@@ -143,6 +145,23 @@ def create_app():
             if bad:
                 db.session.delete(bad)
                 db.session.commit()
+        # Add MAP-SHO component if missing
+        if not Component.query.filter_by(part_number='MAP-SHO').first():
+            map_comp = Component(part_number='MAP-SHO', name='SHO MAP Sensor Mount',
+                                 category='misc', qty=0, reorder_threshold=10)
+            db.session.add(map_comp)
+            db.session.commit()
+        # Add Kevin Wolfe supplier if missing
+        if not Supplier.query.filter_by(name='Kevin Wolfe / Powill').first():
+            kw = Supplier(name='Kevin Wolfe / Powill', email='kwolfe@powill.com',
+                          contact_name='Kevin', notes='BOV mounts and MAP sensor mounts')
+            db.session.add(kw)
+            db.session.flush()
+            for pn in ['BOV-SHO', 'BOV-FUSION', 'MAP-SHO']:
+                comp = Component.query.filter_by(part_number=pn).first()
+                if comp:
+                    db.session.add(SupplierComponent(supplier_id=kw.id, component_id=comp.id))
+            db.session.commit()
         # Create default admin if no users exist
         if not User.query.first():
             admin = User(email='info@ecopowerparts.com', name='Mike', role='admin')

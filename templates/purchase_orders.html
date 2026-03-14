@@ -94,6 +94,29 @@
         </div>
         <button class="btn btn-primary" onclick="calcKitPipes()">Calculate Pipes Needed</button>
         <div id="kit-pipe-result" style="margin-top: 12px;"></div>
+        <div id="map-sensor-reminder" style="display: none; margin-top: 12px; padding: 12px; background: #1e3a5f; border: 1px solid #1e40af; border-radius: 8px; font-size: 13px; color: #93c5fd;"></div>
+    </div>
+
+    <!-- Kevin Wolfe / Powill Calculator (BOV & MAP mounts) -->
+    <div id="kit-wolfe-calc" style="display: none; margin-bottom: 20px;">
+        <h3 style="font-size: 14px; color: #4fc3f7; margin-bottom: 12px;">Order BOV / MAP Mounts</h3>
+        <p style="font-size: 12px; color: #64748b; margin-bottom: 12px;">MAP sensor mounts are required 1:1 with NMD pipes. Enter quantities below or use the individual parts table.</p>
+        <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px;">
+            <div>
+                <label style="font-size: 12px; color: #64748b;">MAP Sensor Mounts</label>
+                <input type="number" id="wolfe-map" value="0" min="0" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+                <span style="font-size: 10px; color: #fbbf24;">Match NMD pipe order qty</span>
+            </div>
+            <div>
+                <label style="font-size: 12px; color: #64748b;">SHO BOV Mounts</label>
+                <input type="number" id="wolfe-bov-sho" value="0" min="0" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+            </div>
+            <div>
+                <label style="font-size: 12px; color: #64748b;">Fusion BOV Mounts</label>
+                <input type="number" id="wolfe-bov-fusion" value="0" min="0" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+            </div>
+        </div>
+        <button class="btn btn-primary" onclick="applyWolfeToPO()">Apply to PO Below</button>
     </div>
 
     <div id="po-parts" style="display: none;">
@@ -188,8 +211,10 @@ async function loadSupplierParts() {
     // Show kit calculators based on supplier
     const supplierName = sel.options[sel.selectedIndex].text;
     const pipeCalc = document.getElementById('kit-pipe-calc');
+    const wolfeCalc = document.getElementById('kit-wolfe-calc');
     kitCalc.style.display = supplierName.includes('R-EP') ? 'block' : 'none';
     pipeCalc.style.display = supplierName.includes('Performance') ? 'block' : 'none';
+    wolfeCalc.style.display = supplierName.includes('Wolfe') ? 'block' : 'none';
 
     const res = await fetch(`/api/supplier/${supplierId}/components`);
     supplierParts = await res.json();
@@ -361,6 +386,41 @@ async function calcKitPipes() {
     html += '<div style="margin-top:12px;"><button class="btn btn-primary" onclick="applyKitPipesToPO()">Apply to PO Below</button></div>';
     document.getElementById('kit-pipe-result').innerHTML = html;
     window._kitPipeData = data;
+
+    // MAP sensor reminder: total NMD pipes ordered = need same qty MAP sensors from Kevin Wolfe
+    const totalNMD = (kitQtys['nmd'] || 0) + (kitQtys['hot_pipes_sho'] || 0) + (kitQtys['hot_pipes_explorer'] || 0);
+    const reminder = document.getElementById('map-sensor-reminder');
+    if (totalNMD > 0) {
+        reminder.style.display = 'block';
+        reminder.innerHTML = `<strong>Reminder:</strong> You need <strong>${totalNMD} MAP sensor mounts</strong> from Kevin Wolfe (kwolfe@powill.com) to match your NMD pipe order. <em>Every NMD pipe ships with a MAP sensor mount.</em>`;
+    } else {
+        reminder.style.display = 'none';
+    }
+}
+
+function applyWolfeToPO() {
+    const mapQty = parseInt(document.getElementById('wolfe-map').value) || 0;
+    const bovShoQty = parseInt(document.getElementById('wolfe-bov-sho').value) || 0;
+    const bovFusionQty = parseInt(document.getElementById('wolfe-bov-fusion').value) || 0;
+
+    const items = [
+        {pn: 'MAP-SHO', qty: mapQty},
+        {pn: 'BOV-SHO', qty: bovShoQty},
+        {pn: 'BOV-FUSION', qty: bovFusionQty},
+    ];
+
+    items.forEach(item => {
+        if (item.qty > 0) {
+            const check = document.querySelector(`.po-check[data-pn="${item.pn}"]`);
+            const qtyInput = document.querySelector(`.po-qty[data-pn="${item.pn}"]`);
+            if (check && qtyInput) {
+                check.checked = true;
+                qtyInput.value = item.qty;
+            }
+        }
+    });
+    document.getElementById('po-status').textContent = 'Kevin Wolfe quantities applied to PO';
+    document.getElementById('po-status').style.color = '#4ade80';
 }
 
 function applyKitPipesToPO() {

@@ -55,6 +55,7 @@ COMPONENTS = {
         "NPT-125": {"name": "1/8\" NPT Bung", "qty": 10},
         "NPT-250": {"name": "1/4\" NPT Bung", "qty": 27},
         "NPT-375": {"name": "3/8\" NPT Bung", "qty": 2},
+        "MAP-SHO": {"name": "SHO MAP Sensor Mount", "qty": 0},
         "BOV-SHO": {"name": "SHO BOV Mount", "qty": 30},
         "BOV-FUSION": {"name": "Fusion BOV Mount", "qty": 69},
         "BOV-TIAL": {"name": "Tial BOV Mount", "qty": 8},
