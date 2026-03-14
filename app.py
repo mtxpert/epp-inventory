@@ -539,12 +539,50 @@ def register_routes(app):
         recent_orders = ShopifyOrder.query.order_by(ShopifyOrder.created_at.desc()).limit(20).all()
         recent_logs = InventoryLog.query.order_by(InventoryLog.created_at.desc()).limit(50).all()
 
+        # Calculate "on order" projection: pending POs → projected buildable kits → retail value
+        pending_pos = PurchaseOrder.query.filter(PurchaseOrder.status.in_(['draft', 'sent'])).all()
+        projected_stock = {c.id: c.qty for c in components}
+        for po in pending_pos:
+            for line in po.lines:
+                projected_stock[line.component_id] = projected_stock.get(line.component_id, 0) + line.qty
+
+        # Recalculate pipe-limited buildable with projected stock
+        proj_pipe_stock = {cid: qty for cid, qty in projected_stock.items()
+                          if any(c.id == cid and c.category == 'pipes' for c in components)}
+        proj_kit_buildable = {}
+        for kit in kits_by_priority:
+            pipe_parts = [kc for kc in kit.components if kc.component.category == 'pipes']
+            if not pipe_parts:
+                # For non-pipe kits (e.g. Raptor), use all components
+                all_parts = [kc for kc in kit.components]
+                if all_parts:
+                    proj_kit_buildable[kit.id] = min(
+                        projected_stock.get(kc.component_id, 0) // kc.quantity for kc in all_parts
+                    )
+                else:
+                    proj_kit_buildable[kit.id] = 0
+                continue
+            max_build = min(proj_pipe_stock.get(kc.component_id, 0) // kc.quantity for kc in pipe_parts)
+            proj_kit_buildable[kit.id] = max_build
+            for kc in pipe_parts:
+                proj_pipe_stock[kc.component_id] = proj_pipe_stock.get(kc.component_id, 0) - (kc.quantity * max_build)
+
+        projected_retail_value = sum(
+            proj_kit_buildable.get(kit.id, 0) * (kit.retail_price or 0)
+            for kit in kits if proj_kit_buildable.get(kit.id, 0) > 0
+        )
+        on_order_value = projected_retail_value - total_retail_value
+
         return render_template('dashboard.html',
             components=components, kits=kits, categories=categories,
             low_stock=low_stock, total_stock=total_stock,
             kit_buildable=kit_buildable, min_buildable=min_buildable,
             kit_pipe_buildable=kit_pipe_buildable,
             total_retail_value=total_retail_value,
+            projected_retail_value=projected_retail_value,
+            on_order_value=on_order_value,
+            pending_pos=pending_pos,
+            proj_kit_buildable=proj_kit_buildable,
             used_in=used_in, recent_orders=recent_orders, recent_logs=recent_logs)
 
     # ── Inventory API ────────────────────────────────────────────
