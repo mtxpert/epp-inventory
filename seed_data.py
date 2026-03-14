@@ -67,6 +67,29 @@ COMPONENTS = {
         "BOX-24S": {"name": "24x12x6 Shipping Box", "qty": 21},
         "BOX-24L": {"name": "24x14x10 Shipping Box", "qty": 21},
         "TAPE": {"name": "Packing Tape", "qty": 10},
+    },
+    "raptor": {
+        # Connector housings (ordered from Mouser, shipped to Sean @ Innova Speed for assembly)
+        "RAPT-CON-LSW": {"name": "Left Switch Connector (34824-0124)", "qty": 0},
+        "RAPT-CON-RSW": {"name": "Right Switch Connector (34824-0125)", "qty": 0},
+        "RAPT-CON-CSM": {"name": "Clock Spring Male Connector (30968-1167)", "qty": 0},
+        "RAPT-CON-SHM": {"name": "Shifter Male Connector (30968-1127)", "qty": 0},
+        "RAPT-CON-CSF": {"name": "Clock Spring Female Connector (30700-1167)", "qty": 0},
+        "RAPT-CON-SHF": {"name": "Shifter Female Connector (30700-1120)", "qty": 0},
+        "RAPT-CON-SCCM": {"name": "SCCM Female Connector (7287-2043-30)", "qty": 0},
+        "RAPT-CON-PSB": {"name": "Paddle Shifter Black Connector (2138557-2)", "qty": 0},
+        "RAPT-CON-PSG": {"name": "Paddle Shifter Grey Connector (2138557-1)", "qty": 0},
+        "RAPT-CON-HORN": {"name": "Horn Connector (12059252)", "qty": 0},
+        # Pin/terminal contacts (ordered from Mouser — qty per kit noted in name)
+        "RAPT-PIN-LSW": {"name": "Left Switch Pins x12/kit (560023-0421)", "qty": 0},
+        "RAPT-PIN-CSM": {"name": "Clock Spring Male Pins x10/kit (TE 2-1419158-5)", "qty": 0},
+        "RAPT-PIN-CSF": {"name": "Clock Spring Female Pins x24/kit (TE 1393366-1)", "qty": 0},
+        "RAPT-PIN-SCCM": {"name": "SCCM Female Pins x3/kit (TE 2035334-2)", "qty": 0},
+        "RAPT-PIN-PS": {"name": "Paddle Shifter Pins x4/kit (2098762-1)", "qty": 0},
+        "RAPT-PIN-HORN": {"name": "Horn Pins x2/kit (12059894-L)", "qty": 0},
+        # Circuit boards (from Jason @ Cybernetworks)
+        "RAPT-PCB-L": {"name": "Raptor Steering Wheel PCB — Left", "qty": 0},
+        "RAPT-PCB-R": {"name": "Raptor Steering Wheel PCB — Right", "qty": 0},
     }
 }
 
@@ -117,6 +140,25 @@ KITS = {
     "f150_intake": {
         "name": "F150 3.5L Intake Tubes", "shopify_id": None, "retail_price": 860,
         "components": {"TR-I-BG": 1, "TR-I-LNG": 1, "SR-0-45-51": 1, "SR-0-45-63": 1, "CLAMP-175": 2, "CLAMP-200": 1, "CLAMP-250": 1}
+    },
+    "raptor_sw_harness": {
+        "name": "Raptor Steering Wheel Harness", "shopify_id": None, "retail_price": 0,
+        "components": {
+            "RAPT-CON-LSW": 1, "RAPT-CON-RSW": 1, "RAPT-CON-CSF": 1,
+            "RAPT-CON-PSB": 1, "RAPT-CON-PSG": 1, "RAPT-CON-HORN": 1,
+            "RAPT-PIN-LSW": 12, "RAPT-PIN-CSF": 24,
+            "RAPT-PIN-PS": 4, "RAPT-PIN-HORN": 2,
+            "RAPT-PCB-L": 1, "RAPT-PCB-R": 1,
+        }
+    },
+    "raptor_console_harness": {
+        "name": "Raptor Console Shifter Harness", "shopify_id": None, "retail_price": 0,
+        "components": {
+            "RAPT-CON-CSM": 1, "RAPT-CON-SHM": 1,
+            "RAPT-CON-SHF": 1, "RAPT-CON-SCCM": 1,
+            "RAPT-PIN-CSM": 10, "RAPT-PIN-CSF": 10,
+            "RAPT-PIN-SCCM": 3,
+        }
     }
 }
 

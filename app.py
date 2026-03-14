@@ -162,6 +162,68 @@ def create_app():
                 if comp:
                     db.session.add(SupplierComponent(supplier_id=kw.id, component_id=comp.id))
             db.session.commit()
+        # Add Raptor steering wheel components if missing
+        if not Component.query.filter_by(part_number='RAPT-CON-LSW').first():
+            raptor_parts = {
+                'RAPT-CON-LSW': 'Left Switch Connector (34824-0124)',
+                'RAPT-CON-RSW': 'Right Switch Connector (34824-0125)',
+                'RAPT-CON-CSM': 'Clock Spring Male Connector (30968-1167)',
+                'RAPT-CON-SHM': 'Shifter Male Connector (30968-1127)',
+                'RAPT-CON-CSF': 'Clock Spring Female Connector (30700-1167)',
+                'RAPT-CON-SHF': 'Shifter Female Connector (30700-1120)',
+                'RAPT-CON-SCCM': 'SCCM Female Connector (7287-2043-30)',
+                'RAPT-CON-PSB': 'Paddle Shifter Black Connector (2138557-2)',
+                'RAPT-CON-PSG': 'Paddle Shifter Grey Connector (2138557-1)',
+                'RAPT-CON-HORN': 'Horn Connector (12059252)',
+                'RAPT-PIN-LSW': 'Left Switch Pins x12/kit (560023-0421)',
+                'RAPT-PIN-CSM': 'Clock Spring Male Pins x10/kit (TE 2-1419158-5)',
+                'RAPT-PIN-CSF': 'Clock Spring Female Pins x24/kit (TE 1393366-1)',
+                'RAPT-PIN-SCCM': 'SCCM Female Pins x3/kit (TE 2035334-2)',
+                'RAPT-PIN-PS': 'Paddle Shifter Pins x4/kit (2098762-1)',
+                'RAPT-PIN-HORN': 'Horn Pins x2/kit (12059894-L)',
+                'RAPT-PCB-L': 'Raptor Steering Wheel PCB — Left',
+                'RAPT-PCB-R': 'Raptor Steering Wheel PCB — Right',
+            }
+            for pn, name in raptor_parts.items():
+                db.session.add(Component(part_number=pn, name=name, category='raptor', qty=0, reorder_threshold=10))
+            db.session.commit()
+        # Add Raptor kits if missing
+        from seed_data import KITS as SEED_KITS
+        for rslug in ['raptor_sw_harness', 'raptor_console_harness']:
+            if not Kit.query.filter_by(slug=rslug).first():
+                rk_info = SEED_KITS[rslug]
+                rk = Kit(slug=rslug, name=rk_info['name'], retail_price=0)
+                db.session.add(rk)
+                db.session.flush()
+                for pn, qty in rk_info['components'].items():
+                    comp = Component.query.filter_by(part_number=pn).first()
+                    if comp:
+                        db.session.add(KitComponent(kit_id=rk.id, component_id=comp.id, quantity=qty))
+                db.session.commit()
+        # Add Mouser supplier if missing
+        if not Supplier.query.filter_by(name='Mouser Electronics').first():
+            mouser = Supplier(name='Mouser Electronics', email='', contact_name='',
+                              notes='Raptor connector housings and pin terminals')
+            db.session.add(mouser)
+            db.session.flush()
+            for comp in Component.query.filter(Component.part_number.like('RAPT-CON-%') | Component.part_number.like('RAPT-PIN-%')).all():
+                db.session.add(SupplierComponent(supplier_id=mouser.id, component_id=comp.id))
+            db.session.commit()
+        # Add Sean / Innova Speed supplier if missing
+        if not Supplier.query.filter_by(name='Innova Speed').first():
+            innova = Supplier(name='Innova Speed', email='sean@innovaspeed.com', contact_name='Sean',
+                              notes='Assembles Raptor steering wheel harnesses from Mouser parts')
+            db.session.add(innova)
+            db.session.commit()
+        # Add Jason / Cybernetworks supplier if missing
+        if not Supplier.query.filter_by(name='Cybernetworks LLC').first():
+            cyber = Supplier(name='Cybernetworks LLC', email='jason@cybernetworksllc.com', contact_name='Jason',
+                             notes='Raptor steering wheel circuit boards (L and R)')
+            db.session.add(cyber)
+            db.session.flush()
+            for comp in Component.query.filter(Component.part_number.like('RAPT-PCB-%')).all():
+                db.session.add(SupplierComponent(supplier_id=cyber.id, component_id=comp.id))
+            db.session.commit()
         # Create default admin if no users exist
         if not User.query.first():
             admin = User(email='info@ecopowerparts.com', name='Mike', role='admin')
@@ -457,8 +519,8 @@ def register_routes(app):
         )
 
         # Group components by category (ordered)
-        cat_order = ['pipes', 'couplers', 'clamps', 'misc']
-        cat_labels = {'pipes': 'Pipes', 'couplers': 'Silicone Hoses & Couplers', 'clamps': 'Clamps', 'misc': 'Misc / Hardware'}
+        cat_order = ['pipes', 'couplers', 'clamps', 'misc', 'raptor']
+        cat_labels = {'pipes': 'Pipes', 'couplers': 'Silicone Hoses & Couplers', 'clamps': 'Clamps', 'misc': 'Misc / Hardware', 'raptor': 'Raptor Steering Wheel'}
         categories = {}
         for cat_key in cat_order:
             label = cat_labels.get(cat_key, cat_key)

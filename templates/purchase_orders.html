@@ -97,6 +97,23 @@
         <div id="map-sensor-reminder" style="display: none; margin-top: 12px; padding: 12px; background: #1e3a5f; border: 1px solid #1e40af; border-radius: 8px; font-size: 13px; color: #93c5fd;"></div>
     </div>
 
+    <!-- Mouser / Raptor Kit Calculator -->
+    <div id="kit-raptor-calc" style="display: none; margin-bottom: 20px;">
+        <h3 style="font-size: 14px; color: #4fc3f7; margin-bottom: 12px;">Order Raptor Connectors by Kit Quantity</h3>
+        <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px;">
+            <div>
+                <label style="font-size: 12px; color: #64748b;">Steering Wheel Harnesses</label>
+                <input type="number" id="raptor-sw" value="0" min="0" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+            </div>
+            <div>
+                <label style="font-size: 12px; color: #64748b;">Console Shifter Harnesses</label>
+                <input type="number" id="raptor-console" value="0" min="0" style="display: block; width: 80px; padding: 6px 10px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+            </div>
+        </div>
+        <button class="btn btn-primary" onclick="calcRaptorParts()">Calculate Parts Needed</button>
+        <div id="kit-raptor-result" style="margin-top: 12px;"></div>
+    </div>
+
     <!-- Kevin Wolfe / Powill Calculator (BOV & MAP mounts) -->
     <div id="kit-wolfe-calc" style="display: none; margin-bottom: 20px;">
         <h3 style="font-size: 14px; color: #4fc3f7; margin-bottom: 12px;">Order BOV / MAP Mounts</h3>
@@ -215,6 +232,8 @@ async function loadSupplierParts() {
     kitCalc.style.display = supplierName.includes('R-EP') ? 'block' : 'none';
     pipeCalc.style.display = supplierName.includes('Performance') ? 'block' : 'none';
     wolfeCalc.style.display = supplierName.includes('Wolfe') ? 'block' : 'none';
+    const raptorCalc = document.getElementById('kit-raptor-calc');
+    raptorCalc.style.display = supplierName.includes('Mouser') ? 'block' : 'none';
 
     const res = await fetch(`/api/supplier/${supplierId}/components`);
     supplierParts = await res.json();
@@ -396,6 +415,54 @@ async function calcKitPipes() {
     } else {
         reminder.style.display = 'none';
     }
+}
+
+async function calcRaptorParts() {
+    const kitQtys = {};
+    const sw = parseInt(document.getElementById('raptor-sw').value) || 0;
+    const console = parseInt(document.getElementById('raptor-console').value) || 0;
+    if (sw > 0) kitQtys['raptor_sw_harness'] = sw;
+    if (console > 0) kitQtys['raptor_console_harness'] = console;
+
+    if (!Object.keys(kitQtys).length) {
+        document.getElementById('kit-raptor-result').innerHTML = '<span style="color:#f87171;">Enter kit quantities above</span>';
+        return;
+    }
+
+    const supplierId = document.getElementById('po-supplier').value;
+    const res = await fetch('/api/kit-part-calc', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({kit_qtys: kitQtys, supplier_id: parseInt(supplierId)})
+    });
+    const data = await res.json();
+
+    let html = '<table><thead><tr><th>Part #</th><th>Name</th><th>Total Needed</th><th>Breakdown</th></tr></thead><tbody>';
+    data.forEach(p => {
+        html += `<tr>
+            <td><strong>${p.part_number}</strong></td>
+            <td>${p.name}</td>
+            <td style="color:#4fc3f7; font-weight:600;">${p.total_needed}</td>
+            <td style="font-size:11px; color:#64748b;">${p.breakdown.join(', ')}</td>
+        </tr>`;
+    });
+    html += '</tbody></table>';
+    html += '<div style="margin-top:12px;"><button class="btn btn-primary" onclick="applyRaptorToPO()">Apply to PO Below</button></div>';
+    document.getElementById('kit-raptor-result').innerHTML = html;
+    window._kitRaptorData = data;
+}
+
+function applyRaptorToPO() {
+    if (!window._kitRaptorData) return;
+    window._kitRaptorData.forEach(p => {
+        const check = document.querySelector(`.po-check[data-pn="${p.part_number}"]`);
+        const qtyInput = document.querySelector(`.po-qty[data-pn="${p.part_number}"]`);
+        if (check && qtyInput && p.total_needed > 0) {
+            check.checked = true;
+            qtyInput.value = p.total_needed;
+        }
+    });
+    document.getElementById('po-status').textContent = 'Raptor connector quantities applied to PO';
+    document.getElementById('po-status').style.color = '#4ade80';
 }
 
 function applyWolfeToPO() {
