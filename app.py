@@ -188,6 +188,12 @@ def create_app():
             for pn, name in raptor_parts.items():
                 db.session.add(Component(part_number=pn, name=name, category='raptor', qty=0, reorder_threshold=10))
             db.session.commit()
+        # Set PCB stock to 70 if still at 0 (initial inventory count)
+        for pcb_pn in ['RAPT-PCB-L', 'RAPT-PCB-R']:
+            pcb = Component.query.filter_by(part_number=pcb_pn).first()
+            if pcb and pcb.qty == 0:
+                pcb.qty = 70
+        db.session.commit()
         # Add Raptor kits if missing
         from seed_data import KITS as SEED_KITS
         for rslug in ['raptor_sw_harness', 'raptor_console_harness']:

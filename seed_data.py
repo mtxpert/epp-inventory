@@ -88,8 +88,8 @@ COMPONENTS = {
         "RAPT-PIN-PS": {"name": "Paddle Shifter Pins x4/kit (2098762-1)", "qty": 0},
         "RAPT-PIN-HORN": {"name": "Horn Pins x2/kit (12059894-L)", "qty": 0},
         # Circuit boards (from Jason @ Cybernetworks)
-        "RAPT-PCB-L": {"name": "Raptor Steering Wheel PCB — Left", "qty": 0},
-        "RAPT-PCB-R": {"name": "Raptor Steering Wheel PCB — Right", "qty": 0},
+        "RAPT-PCB-L": {"name": "Raptor Steering Wheel PCB — Left", "qty": 70},
+        "RAPT-PCB-R": {"name": "Raptor Steering Wheel PCB — Right", "qty": 70},
     }
 }
 
