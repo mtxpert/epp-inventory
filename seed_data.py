@@ -142,7 +142,7 @@ KITS = {
         "components": {"TR-I-BG": 1, "TR-I-LNG": 1, "SR-0-45-51": 1, "SR-0-45-63": 1, "CLAMP-175": 2, "CLAMP-200": 1, "CLAMP-250": 1}
     },
     "raptor_sw_harness": {
-        "name": "Raptor Steering Wheel Harness", "shopify_id": None, "retail_price": 0,
+        "name": "Raptor Steering Wheel Harness", "shopify_id": None, "retail_price": 360,
         "components": {
             "RAPT-CON-LSW": 1, "RAPT-CON-RSW": 1, "RAPT-CON-CSF": 1,
             "RAPT-CON-PSB": 1, "RAPT-CON-PSG": 1, "RAPT-CON-HORN": 1,

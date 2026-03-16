@@ -41,6 +41,7 @@ def create_app():
     app.config['SHOPIFY_WEBHOOK_SECRET'] = os.environ.get('SHOPIFY_WEBHOOK_SECRET', '')
     app.config['ALERT_RECIPIENTS'] = os.environ.get('ALERT_RECIPIENTS', 'info@ecopowerparts.com')
     app.config['APP_URL'] = os.environ.get('APP_URL', 'https://epp-inventory.onrender.com')
+    app.config['MOUSER_API_KEY'] = os.environ.get('MOUSER_API_KEY', '')
 
     # Mail config
     app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
@@ -106,7 +107,7 @@ def create_app():
         from seed_data import KITS
         for slug, kit_info in KITS.items():
             kit = Kit.query.filter_by(slug=slug).first()
-            if kit and kit_info.get('retail_price') and (not kit.retail_price):
+            if kit and kit_info.get('retail_price') and kit.retail_price != kit_info['retail_price']:
                 kit.retail_price = kit_info['retail_price']
         db.session.commit()
         # Seed suppliers if none exist
@@ -295,21 +296,31 @@ def generate_inventory_snapshot(email_to=None):
         })
 
     # Calculate retail value (pipe-limited buildable * retail price)
+    # Raptor kits use PCBs as limiting factor instead of pipes
     pipe_stock = {c.id: c.qty for c in components if c.category == 'pipes'}
+    pcb_stock = {c.id: c.qty for c in components if c.part_number.startswith('RAPT-PCB-')}
     kit_priority = {
         'hot_pipes_sho': 1, 'intake_stock_hose': 2, 'intake_custom_hose': 3,
         'hot_pipes_explorer': 4, 'fusion_intake': 5, 'fusion_charge': 6,
         'f150_intake': 7, 'nmd_upgrade': 8, 'nmd': 9, 'explorer_nmd': 10,
+        'raptor_sw_harness': 11, 'raptor_console_harness': 12,
     }
     kits_by_priority = sorted(kits, key=lambda k: kit_priority.get(k.slug, 99))
     kit_retail_details = []
     for kit in kits_by_priority:
         pipe_parts = [kc for kc in kit.components if kc.component.category == 'pipes']
-        if not pipe_parts:
+        pcb_parts = [kc for kc in kit.components if kc.component.part_number.startswith('RAPT-PCB-')]
+        if pcb_parts:
+            # Raptor kits: limit by PCB (circuit board) stock
+            max_build = min(pcb_stock.get(kc.component_id, 0) // kc.quantity for kc in pcb_parts)
+            for kc in pcb_parts:
+                pcb_stock[kc.component_id] = pcb_stock.get(kc.component_id, 0) - (kc.quantity * max_build)
+        elif pipe_parts:
+            max_build = min(pipe_stock.get(kc.component_id, 0) // kc.quantity for kc in pipe_parts)
+            for kc in pipe_parts:
+                pipe_stock[kc.component_id] = pipe_stock.get(kc.component_id, 0) - (kc.quantity * max_build)
+        else:
             continue
-        max_build = min(pipe_stock.get(kc.component_id, 0) // kc.quantity for kc in pipe_parts)
-        for kc in pipe_parts:
-            pipe_stock[kc.component_id] = pipe_stock.get(kc.component_id, 0) - (kc.quantity * max_build)
         kit_value = max_build * (kit.retail_price or 0)
         total_retail += kit_value
         if max_build > 0:
@@ -335,7 +346,7 @@ def generate_inventory_snapshot(email_to=None):
     # Build email
     body = f"EPP INVENTORY VALUATION — {snapshot_date.strftime('%B %d, %Y')}\n"
     body += "=" * 60 + "\n\n"
-    body += f"Total Retail Value (pipe-limited kits): ${total_retail:,.2f}\n"
+    body += f"Total Retail Value (buildable kits): ${total_retail:,.2f}\n"
     body += f"Total Cost Basis (component inventory):  ${total_cost:,.2f}\n"
     body += f"Estimated Gross Margin:                  ${total_retail - total_cost:,.2f}\n\n"
 
@@ -546,26 +557,28 @@ def register_routes(app):
             for line in po.lines:
                 projected_stock[line.component_id] = projected_stock.get(line.component_id, 0) + line.qty
 
-        # Recalculate pipe-limited buildable with projected stock
+        # Recalculate pipe/PCB-limited buildable with projected stock
         proj_pipe_stock = {cid: qty for cid, qty in projected_stock.items()
                           if any(c.id == cid and c.category == 'pipes' for c in components)}
+        proj_pcb_stock = {cid: qty for cid, qty in projected_stock.items()
+                         if any(c.id == cid and c.part_number.startswith('RAPT-PCB-') for c in components)}
         proj_kit_buildable = {}
         for kit in kits_by_priority:
             pipe_parts = [kc for kc in kit.components if kc.component.category == 'pipes']
-            if not pipe_parts:
-                # For non-pipe kits (e.g. Raptor), use all components
-                all_parts = [kc for kc in kit.components]
-                if all_parts:
-                    proj_kit_buildable[kit.id] = min(
-                        projected_stock.get(kc.component_id, 0) // kc.quantity for kc in all_parts
-                    )
-                else:
-                    proj_kit_buildable[kit.id] = 0
-                continue
-            max_build = min(proj_pipe_stock.get(kc.component_id, 0) // kc.quantity for kc in pipe_parts)
-            proj_kit_buildable[kit.id] = max_build
-            for kc in pipe_parts:
-                proj_pipe_stock[kc.component_id] = proj_pipe_stock.get(kc.component_id, 0) - (kc.quantity * max_build)
+            pcb_parts = [kc for kc in kit.components if kc.component.part_number.startswith('RAPT-PCB-')]
+            if pcb_parts:
+                # Raptor kits: limit by PCB (circuit board) stock
+                max_build = min(proj_pcb_stock.get(kc.component_id, 0) // kc.quantity for kc in pcb_parts)
+                proj_kit_buildable[kit.id] = max_build
+                for kc in pcb_parts:
+                    proj_pcb_stock[kc.component_id] = proj_pcb_stock.get(kc.component_id, 0) - (kc.quantity * max_build)
+            elif pipe_parts:
+                max_build = min(proj_pipe_stock.get(kc.component_id, 0) // kc.quantity for kc in pipe_parts)
+                proj_kit_buildable[kit.id] = max_build
+                for kc in pipe_parts:
+                    proj_pipe_stock[kc.component_id] = proj_pipe_stock.get(kc.component_id, 0) - (kc.quantity * max_build)
+            else:
+                proj_kit_buildable[kit.id] = 0
 
         projected_retail_value = sum(
             proj_kit_buildable.get(kit.id, 0) * (kit.retail_price or 0)
