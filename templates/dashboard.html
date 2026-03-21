@@ -66,7 +66,8 @@
 
 <!-- Action Bar -->
 <div style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; align-items: center;">
-    <button class="btn btn-primary" onclick="syncOrders()" id="syncBtn">Sync Shopify Orders</button>
+    <button class="btn btn-primary" onclick="syncOrders(24)" id="syncBtn">Sync Last 24h</button>
+    <button class="btn" style="background:#7c3aed;color:#fff;" onclick="syncOrders(2160)" id="backfillBtn">Back-fill Since 3/14</button>
     <a href="/api/export-csv" class="btn" style="background: #475569; color: #fff;">Export CSV</a>
     <button class="btn btn-success" onclick="location.reload()">Refresh</button>
     <div id="syncStatus" style="font-size: 13px; color: #64748b; display: flex; align-items: center;"></div>
@@ -388,14 +389,26 @@ async function addComponent() {
     } catch(e) { status.textContent = 'Error: ' + e.message; status.style.color = '#f87171'; }
 }
 
-async function syncOrders() {
+async function syncOrders(hours) {
     const btn = document.getElementById('syncBtn');
+    const backfill = document.getElementById('backfillBtn');
     const status = document.getElementById('syncStatus');
     btn.disabled = true;
-    btn.textContent = 'Syncing...';
-    status.textContent = '';
+    backfill.disabled = true;
+    btn.textContent = hours > 100 ? 'Syncing...' : 'Syncing...';
+    status.textContent = hours > 100 ? 'Back-filling orders since 3/14 — this may take a moment...' : '';
+    status.style.color = '#64748b';
     try {
-        const res = await fetch('/api/sync-orders', {method: 'POST'});
+        const res = await fetch('/api/sync-orders', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({hours: hours})
+        });
+        if (!res.headers.get('content-type')?.includes('json')) {
+            status.textContent = 'Session expired — please refresh and log in again.';
+            status.style.color = '#f87171';
+            return;
+        }
         const data = await res.json();
         if (data.error) {
             status.textContent = 'Error: ' + data.error;
@@ -412,7 +425,8 @@ async function syncOrders() {
         status.style.color = '#f87171';
     }
     btn.disabled = false;
-    btn.textContent = 'Sync Shopify Orders';
+    backfill.disabled = false;
+    btn.textContent = 'Sync Last 24h';
 }
 </script>
 {% endblock %}

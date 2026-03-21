@@ -8,6 +8,18 @@ from datetime import datetime, timezone, timedelta
 from flask import current_app
 from models import db, Component, Kit, KitComponent, ShopifyOrder, InventoryLog
 
+# Tial BOV variant IDs → label map
+TIAL_VARIANT_IDS = {
+    '43898646757531': 'Tial Q - Black',
+    '43898646823067': 'Tial Q - Red',
+    '43898646954139': 'Tial Q - Blue',
+    '43898647117979': 'Tial Q - Purple',
+    '43898647183515': 'Tial Q - Silver',
+}
+
+FULLRACE_EMAIL = 'sales@fullrace.com'
+JOSH_EMAIL = 'Durmajdesigns@gmail.com'
+
 
 def verify_webhook(data, hmac_header, secret):
     """Verify Shopify webhook HMAC signature."""
@@ -81,11 +93,45 @@ def process_order(order_data):
     existing.processed_at = datetime.now(timezone.utc)
     db.session.commit()
 
+    # Send Tial BOV supplier email if needed
+    for item in line_items:
+        vid = str(item.get('variant_id', ''))
+        if vid in TIAL_VARIANT_IDS:
+            # Get label from line item properties first, fall back to map
+            props = {p['name']: p['value'] for p in item.get('properties', [])}
+            bov_label = props.get('BOV', TIAL_VARIANT_IDS[vid])
+            send_tial_bov_email(order_number, bov_label)
+
     return {
         'status': 'processed',
         'order': order_number,
         'deductions': deductions
     }
+
+
+def send_tial_bov_email(order_number, bov_label):
+    """Email FullRace when a Tial BOV is ordered."""
+    from flask_mail import Message
+    from app import mail
+
+    subject = f"New Order - Tial {bov_label}"
+    body = (
+        f"Hey guys need another Tial BoV {bov_label} with 10psi spring please. "
+        f"Josh will pick it up once you have it.\n\n"
+        f"EPP Order #{order_number}"
+    )
+
+    try:
+        msg = Message(
+            subject=subject,
+            recipients=[FULLRACE_EMAIL],
+            cc=[JOSH_EMAIL],
+            body=body
+        )
+        mail.send(msg)
+        current_app.logger.info(f"Tial BOV email sent for order #{order_number}: {bov_label}")
+    except Exception as e:
+        current_app.logger.error(f"Failed to send Tial BOV email: {e}")
 
 
 def get_low_stock_components():
@@ -113,6 +159,8 @@ def sync_recent_orders(hours=6):
     try:
         r = requests.get(url, headers=headers, params=params, timeout=30)
         r.raise_for_status()
+        if 'application/json' not in r.headers.get('Content-Type', ''):
+            return {'error': f'Shopify returned non-JSON ({r.status_code}). Check SHOPIFY_TOKEN env var.'}
         orders = r.json().get('orders', [])
     except Exception as e:
         return {'error': str(e)}
