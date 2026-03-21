@@ -888,48 +888,47 @@ def register_routes(app):
     def send_po(po_id):
         from flask_mail import Message
         po = PurchaseOrder.query.get_or_404(po_id)
-
-        date_str = po.created_at.strftime('%B %d, %Y')
-        subtotal = sum(l.qty * (l.unit_cost or 0) for l in po.lines)
-
-        body  = "=" * 65 + "\n"
-        body += "                     PURCHASE ORDER\n"
-        body += "=" * 65 + "\n\n"
-        body += f"Eco Power Parts\n"
-        body += f"910 S Hohokam Dr #118\n"
-        body += f"Tempe, AZ 85281\n"
-        body += f"Phone: (602) 505-0701\n"
-        body += f"info@ecopowerparts.com\n\n"
-        body += f"PO #:  {po.po_number}\n"
-        body += f"Date:  {date_str}\n\n"
-        body += f"VENDOR:\n"
-        body += f"  {po.supplier.name}\n"
-        if po.supplier.email:
-            body += f"  {po.supplier.email}\n"
-        body += "\n"
-        body += f"SHIP TO:\n"
-        body += f"  Eco Power Parts\n"
-        body += f"  910 S Hohokam Dr #118\n"
-        body += f"  Tempe, AZ 85281\n"
-        body += f"  (602) 505-0701\n\n"
-        body += "-" * 65 + "\n"
-        body += f"{'ITEM':<15} {'DESCRIPTION':<32} {'QTY':>5} {'UNIT':>8} {'TOTAL':>9}\n"
-        body += "-" * 65 + "\n"
-        for line in po.lines:
-            unit = f"${line.unit_cost:.2f}" if line.unit_cost else "TBD"
-            total = f"${line.qty * line.unit_cost:.2f}" if line.unit_cost else "TBD"
-            body += f"{line.component.part_number:<15} {line.component.name:<32} {line.qty:>5} {unit:>8} {total:>9}\n"
-        body += "-" * 65 + "\n"
-        if subtotal:
-            body += f"{'':>54} SUBTOTAL: ${subtotal:>8.2f}\n"
-            body += f"{'':>54} SHIPPING:      TBD\n"
-        body += "\n"
-        if po.notes:
-            body += f"Notes: {po.notes}\n\n"
-        body += "Please confirm receipt and estimated ship date.\n"
-        body += "Thank you,\nMike Bambic\nEco Power Parts\n"
-
         try:
+            date_str = po.created_at.strftime('%B %d, %Y') if po.created_at else 'N/A'
+            subtotal = sum(l.qty * (l.unit_cost or 0) for l in po.lines)
+
+            body  = "=" * 65 + "\n"
+            body += "                     PURCHASE ORDER\n"
+            body += "=" * 65 + "\n\n"
+            body += "Eco Power Parts\n"
+            body += "910 S Hohokam Dr #118\n"
+            body += "Tempe, AZ 85281\n"
+            body += "Phone: (602) 505-0701\n"
+            body += "info@ecopowerparts.com\n\n"
+            body += f"PO #:  {po.po_number}\n"
+            body += f"Date:  {date_str}\n\n"
+            body += "VENDOR:\n"
+            body += f"  {po.supplier.name}\n"
+            if po.supplier.email:
+                body += f"  {po.supplier.email}\n"
+            body += "\n"
+            body += "SHIP TO:\n"
+            body += "  Eco Power Parts\n"
+            body += "  910 S Hohokam Dr #118\n"
+            body += "  Tempe, AZ 85281\n"
+            body += "  (602) 505-0701\n\n"
+            body += "-" * 65 + "\n"
+            body += f"{'ITEM':<15} {'DESCRIPTION':<32} {'QTY':>5} {'UNIT':>8} {'TOTAL':>9}\n"
+            body += "-" * 65 + "\n"
+            for line in po.lines:
+                unit = f"${line.unit_cost:.2f}" if line.unit_cost else "TBD"
+                total = f"${line.qty * line.unit_cost:.2f}" if line.unit_cost else "TBD"
+                body += f"{line.component.part_number:<15} {line.component.name:<32} {line.qty:>5} {unit:>8} {total:>9}\n"
+            body += "-" * 65 + "\n"
+            if subtotal:
+                body += f"{'':>54} SUBTOTAL: ${subtotal:>8.2f}\n"
+                body += f"{'':>54} SHIPPING:      TBD\n"
+            body += "\n"
+            if po.notes:
+                body += f"Notes: {po.notes}\n\n"
+            body += "Please confirm receipt and estimated ship date.\n"
+            body += "Thank you,\nMike Bambic\nEco Power Parts\n"
+
             msg = Message(
                 subject=f"[EPP] Purchase Order {po.po_number}",
                 recipients=[po.supplier.email],
@@ -941,6 +940,7 @@ def register_routes(app):
             db.session.commit()
             return jsonify({'ok': True, 'email_body': body})
         except Exception as e:
+            current_app.logger.error(f"send_po error: {e}")
             return jsonify({'error': str(e)}), 500
 
     @app.route('/api/po/<int:po_id>/receive', methods=['POST'])
