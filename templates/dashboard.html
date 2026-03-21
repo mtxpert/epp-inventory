@@ -66,8 +66,8 @@
 
 <!-- Action Bar -->
 <div style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; align-items: center;">
-    <button class="btn btn-primary" onclick="syncOrders(24)" id="syncBtn">Sync Last 24h</button>
-    <button class="btn" style="background:#7c3aed;color:#fff;" onclick="syncOrders(2160)" id="backfillBtn">Back-fill Since 3/14</button>
+    <button class="btn btn-primary" onclick="syncOrders(48)" id="syncBtn">Sync Orders</button>
+    <button class="btn" style="background:#7c3aed;color:#fff;" onclick="syncOrders(2160)" id="fullSyncBtn">Full Sync (90 days)</button>
     <a href="/api/export-csv" class="btn" style="background: #475569; color: #fff;">Export CSV</a>
     <button class="btn btn-success" onclick="location.reload()">Refresh</button>
     <div id="syncStatus" style="font-size: 13px; color: #64748b; display: flex; align-items: center;"></div>
@@ -391,12 +391,12 @@ async function addComponent() {
 
 async function syncOrders(hours) {
     const btn = document.getElementById('syncBtn');
-    const backfill = document.getElementById('backfillBtn');
+    const fullBtn = document.getElementById('fullSyncBtn');
     const status = document.getElementById('syncStatus');
     btn.disabled = true;
-    backfill.disabled = true;
-    btn.textContent = hours > 100 ? 'Syncing...' : 'Syncing...';
-    status.textContent = hours > 100 ? 'Back-filling orders since 3/14 — this may take a moment...' : '';
+    fullBtn.disabled = true;
+    btn.textContent = 'Syncing...';
+    status.textContent = hours > 100 ? 'Syncing all orders — this may take a moment...' : 'Syncing recent orders...';
     status.style.color = '#64748b';
     try {
         const res = await fetch('/api/sync-orders', {
@@ -425,8 +425,8 @@ async function syncOrders(hours) {
         status.style.color = '#f87171';
     }
     btn.disabled = false;
-    backfill.disabled = false;
-    btn.textContent = 'Sync Last 24h';
+    fullBtn.disabled = false;
+    btn.textContent = 'Sync Orders';
 }
 </script>
 {% endblock %}

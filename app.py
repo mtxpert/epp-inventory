@@ -665,7 +665,7 @@ def register_routes(app):
     @login_required
     def sync_orders():
         from shopify_sync import sync_recent_orders
-        hours = int(request.get_json(silent=True) or {}).get('hours', 24)
+        hours = int((request.get_json(silent=True) or {}).get('hours', 24))
         result = sync_recent_orders(hours=hours)
         return jsonify(result)
 
