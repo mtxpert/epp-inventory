@@ -168,12 +168,21 @@ def sync_recent_orders(hours=6):
     results = []
     for order in orders:
         if order.get('financial_status') in ('paid', 'partially_paid', None):
-            result = process_order(order)
-            results.append(result)
+            try:
+                result = process_order(order)
+                results.append(result)
+            except Exception as e:
+                order_num = order.get('order_number') or order.get('name', '?')
+                current_app.logger.error(f"Error processing order #{order_num}: {e}")
+                results.append({'status': 'error', 'order': str(order_num), 'error': str(e)})
 
-    low_stock = get_low_stock_components()
-    if low_stock:
-        send_low_stock_alert(low_stock)
+    try:
+        low_stock = get_low_stock_components()
+        if low_stock:
+            send_low_stock_alert(low_stock)
+    except Exception as e:
+        current_app.logger.error(f"Error in low stock check: {e}")
+        low_stock = []
 
     return {'synced': len(results), 'results': results, 'low_stock_count': len(low_stock)}
 

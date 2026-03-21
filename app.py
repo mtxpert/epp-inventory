@@ -889,18 +889,45 @@ def register_routes(app):
         from flask_mail import Message
         po = PurchaseOrder.query.get_or_404(po_id)
 
-        body = f"Purchase Order: {po.po_number}\n"
-        body += f"Date: {po.created_at.strftime('%Y-%m-%d')}\n"
-        body += f"From: EcoPowerParts\n"
-        body += "=" * 50 + "\n\n"
-        body += f"{'Part Number':<15} {'Description':<40} {'Qty':>6}\n"
+        date_str = po.created_at.strftime('%B %d, %Y')
+        subtotal = sum(l.qty * (l.unit_cost or 0) for l in po.lines)
+
+        body  = "=" * 65 + "\n"
+        body += "                     PURCHASE ORDER\n"
+        body += "=" * 65 + "\n\n"
+        body += f"Eco Power Parts\n"
+        body += f"910 S Hohokam Dr #118\n"
+        body += f"Tempe, AZ 85281\n"
+        body += f"Phone: (602) 505-0701\n"
+        body += f"info@ecopowerparts.com\n\n"
+        body += f"PO #:  {po.po_number}\n"
+        body += f"Date:  {date_str}\n\n"
+        body += f"VENDOR:\n"
+        body += f"  {po.supplier.name}\n"
+        if po.supplier.email:
+            body += f"  {po.supplier.email}\n"
+        body += "\n"
+        body += f"SHIP TO:\n"
+        body += f"  Eco Power Parts\n"
+        body += f"  910 S Hohokam Dr #118\n"
+        body += f"  Tempe, AZ 85281\n"
+        body += f"  (602) 505-0701\n\n"
+        body += "-" * 65 + "\n"
+        body += f"{'ITEM':<15} {'DESCRIPTION':<32} {'QTY':>5} {'UNIT':>8} {'TOTAL':>9}\n"
         body += "-" * 65 + "\n"
         for line in po.lines:
-            body += f"{line.component.part_number:<15} {line.component.name:<40} {line.qty:>6}\n"
+            unit = f"${line.unit_cost:.2f}" if line.unit_cost else "TBD"
+            total = f"${line.qty * line.unit_cost:.2f}" if line.unit_cost else "TBD"
+            body += f"{line.component.part_number:<15} {line.component.name:<32} {line.qty:>5} {unit:>8} {total:>9}\n"
         body += "-" * 65 + "\n"
+        if subtotal:
+            body += f"{'':>54} SUBTOTAL: ${subtotal:>8.2f}\n"
+            body += f"{'':>54} SHIPPING:      TBD\n"
+        body += "\n"
         if po.notes:
-            body += f"\nNotes: {po.notes}\n"
-        body += f"\nPlease confirm receipt of this order.\nThank you,\nEcoPowerParts\n"
+            body += f"Notes: {po.notes}\n\n"
+        body += "Please confirm receipt and estimated ship date.\n"
+        body += "Thank you,\nMike Bambic\nEco Power Parts\n"
 
         try:
             msg = Message(
