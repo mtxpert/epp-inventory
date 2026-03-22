@@ -900,6 +900,18 @@ def register_routes(app):
             s.login(username, password)
             s.sendmail(sender, [to_addr], msg.as_string())
 
+    @app.route('/api/po/<int:po_id>/test', methods=['POST'])
+    @login_required
+    def test_po(po_id):
+        try:
+            po = PurchaseOrder.query.get(po_id)
+            if not po:
+                return jsonify({'error': 'not found'}), 404
+            return jsonify({'ok': True, 'po': po.po_number, 'supplier': po.supplier.name, 'email': po.supplier.email})
+        except BaseException as e:
+            import traceback
+            return jsonify({'error': str(e), 'type': type(e).__name__, 'traceback': traceback.format_exc()}), 500
+
     @app.route('/api/po/<int:po_id>/send', methods=['POST'])
     @login_required
     def send_po(po_id):
