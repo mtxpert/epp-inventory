@@ -1153,6 +1153,49 @@ def register_routes(app):
             result.append(info)
         return jsonify(result)
 
+    @app.route('/admin/repair-inventory', methods=['POST'])
+    @login_required
+    def repair_inventory_deductions():
+        """One-time fix: reverse deductions for orders #1372-#1377 which were incorrectly
+        processed — seed inventory already reflected stock after those orders shipped."""
+        WRONG_ORDER_IDS = [
+            '5996711215259',  # #1372
+            '5997610598555',  # #1373
+            '5998099562651',  # #1374
+            '6000732700827',  # #1375
+            '6001947771035',  # #1376
+            '6009339805851',  # #1377
+        ]
+        reversed_logs = []
+        skipped = []
+        for oid in WRONG_ORDER_IDS:
+            logs = InventoryLog.query.filter_by(order_id=oid).all()
+            if not logs:
+                skipped.append(oid)
+                continue
+            for log in logs:
+                if log.qty_change < 0:  # only reverse deductions
+                    comp = Component.query.get(log.component_id)
+                    if comp:
+                        comp.qty -= log.qty_change  # subtracting negative = adding back
+                        reversal = InventoryLog(
+                            component_id=log.component_id,
+                            qty_change=-log.qty_change,
+                            reason=f"REPAIR: reversed incorrect deduction from order #{oid} (pre-cutoff order)",
+                            user_id=current_user.id
+                        )
+                        db.session.add(reversal)
+                        reversed_logs.append({
+                            'order_id': oid, 'part': comp.part_number,
+                            'added_back': -log.qty_change, 'new_qty': comp.qty
+                        })
+            # Remove from ShopifyOrder so future syncs won't try to re-process
+            wrong_order = ShopifyOrder.query.filter_by(shopify_order_id=oid).first()
+            if wrong_order:
+                db.session.delete(wrong_order)
+        db.session.commit()
+        return jsonify({'ok': True, 'reversed': reversed_logs, 'skipped': skipped})
+
     # ── Invoices & COGS ─────────────────────────────────────────
 
     @app.route('/invoices')
