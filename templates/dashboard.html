@@ -82,6 +82,7 @@
     <div class="tab" onclick="showTab('orders')">Recent Orders</div>
     <div class="tab" onclick="showTab('alerts')">Low Stock Alerts</div>
     <div class="tab" onclick="showTab('log')">Activity Log</div>
+    <div class="tab" onclick="showTab('lowering'); loadLoweringKit()">Lowering Kit (F-150)</div>
 </div>
 
 <!-- Tab: Component Inventory -->
@@ -285,6 +286,21 @@
     </div>
 </div>
 
+<!-- Tab: Lowering Kit (Turn14) -->
+<div id="tab-lowering" class="tab-content">
+    <div class="section">
+        <h2>F-150 Lowering Kit — Live Turn14 Data</h2>
+        <p style="font-size:13px;color:#64748b;margin-bottom:16px;">Real-time inventory, MAP pricing, and availability from Turn14 Distribution. Updates hourly.</p>
+        <div id="loweringStatus" style="font-size:13px;color:#64748b;margin-bottom:12px;"></div>
+        <table id="loweringTable" style="display:none;">
+            <thead>
+                <tr><th>Part #</th><th>Name</th><th>Brand</th><th>MAP Price</th><th>Our Cost</th><th>T14 Wh Stock</th><th>Mfr Stock</th><th>Mfr ESD</th><th>Status</th></tr>
+            </thead>
+            <tbody id="loweringBody"></tbody>
+        </table>
+    </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -387,6 +403,46 @@ async function addComponent() {
         if (data.error) { status.textContent = data.error; status.style.color = '#f87171'; }
         else { status.textContent = 'Added!'; status.style.color = '#4ade80'; setTimeout(() => location.reload(), 800); }
     } catch(e) { status.textContent = 'Error: ' + e.message; status.style.color = '#f87171'; }
+}
+
+let loweringLoaded = false;
+async function loadLoweringKit() {
+    if (loweringLoaded) return;
+    const status = document.getElementById('loweringStatus');
+    status.textContent = 'Loading from Turn14...';
+    try {
+        const res = await fetch('/api/turn14/inventory');
+        const d = await res.json();
+        if (!d.ok) { status.textContent = 'Error: ' + d.error; return; }
+        const MFR_LABEL = {'2352':'bel2352','16001':'bel16001','6443':'bel6443','6569':'umi6569'};
+        const tbody = document.getElementById('loweringBody');
+        tbody.innerHTML = '';
+        for (const [mfr, item] of Object.entries(d.data)) {
+            if (item.error) {
+                tbody.innerHTML += `<tr><td>${MFR_LABEL[mfr]||mfr}</td><td colspan="8" style="color:#f87171">${item.error}</td></tr>`;
+                continue;
+            }
+            const totalStock = (item.wh_qty||0) + (item.mfr_qty||0);
+            const stockColor = totalStock > 0 ? '#4ade80' : '#f87171';
+            const statusText = totalStock > 0 ? `In Stock (${totalStock})` : 'Out of Stock';
+            tbody.innerHTML += `<tr>
+                <td><strong>${mfr}</strong></td>
+                <td>${item.name}</td>
+                <td style="color:#94a3b8">${item.brand}</td>
+                <td style="color:#4ade80;font-weight:600">${item.map_price ? '$'+item.map_price.toLocaleString('en-US',{minimumFractionDigits:2}) : '—'}</td>
+                <td style="color:#94a3b8">${item.our_cost ? '$'+item.our_cost.toLocaleString('en-US',{minimumFractionDigits:2}) : '—'}</td>
+                <td>${item.wh_qty||0}</td>
+                <td>${item.mfr_qty||0}</td>
+                <td style="font-size:12px;color:#64748b">${item.mfr_esd||'—'}</td>
+                <td style="color:${stockColor};font-weight:600">${statusText}</td>
+            </tr>`;
+        }
+        document.getElementById('loweringTable').style.display = '';
+        status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+        loweringLoaded = true;
+    } catch(e) {
+        status.textContent = 'Failed to load: ' + e.message;
+    }
 }
 
 async function syncOrders(hours) {

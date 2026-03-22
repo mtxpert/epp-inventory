@@ -42,6 +42,8 @@ def create_app():
     app.config['ALERT_RECIPIENTS'] = os.environ.get('ALERT_RECIPIENTS', 'info@ecopowerparts.com')
     app.config['APP_URL'] = os.environ.get('APP_URL', 'https://epp-inventory.onrender.com')
     app.config['MOUSER_API_KEY'] = os.environ.get('MOUSER_API_KEY', '')
+    app.config['TURN14_CLIENT_ID'] = os.environ.get('TURN14_CLIENT_ID', 'd6a481e8739ac6112389ef3dbaef9badc729149f')
+    app.config['TURN14_CLIENT_SECRET'] = os.environ.get('TURN14_CLIENT_SECRET', '3f284c18997e2800f6a5e8d08fc931bddf79088e')
 
     # Mail config
     app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
@@ -79,6 +81,13 @@ def create_app():
             'hour': 23,
             'minute': 30,
             'misfire_grace_time': 86400
+        },
+        {
+            'id': 'turn14_sync',
+            'func': 'app:scheduled_turn14_sync',
+            'trigger': 'interval',
+            'hours': 1,
+            'misfire_grace_time': 900
         }
     ]
 
@@ -395,6 +404,18 @@ def scheduled_year_end_snapshot():
     with app.app_context():
         result = generate_inventory_snapshot(email_to='sean@askwold.com,info@ecopowerparts.com')
         app.logger.info(f"Year-end snapshot: retail=${result['total_retail']:,.2f}, cost=${result['total_cost']:,.2f}")
+
+
+def scheduled_turn14_sync():
+    """Hourly — sync Turn14 inventory/pricing for lowering kit parts."""
+    with app.app_context():
+        try:
+            from turn14_sync import sync_lowering_kit_inventory
+            results = sync_lowering_kit_inventory()
+            in_stock = [p for p, d in results.items() if d.get('in_stock')]
+            app.logger.info(f"Turn14 sync complete. In stock: {in_stock}")
+        except Exception as e:
+            app.logger.error(f"Turn14 sync failed: {e}")
 
 
 def register_routes(app):
@@ -1448,6 +1469,35 @@ def register_routes(app):
                 updated.append(f"{kit.name}: ${kit.retail_price}")
         db.session.commit()
         return jsonify({'ok': True, 'updated': updated})
+
+    # ── Turn14 Routes ────────────────────────────────────────────
+
+    @app.route('/api/turn14/inventory')
+    @login_required
+    def turn14_inventory():
+        """Return current Turn14 inventory and pricing for lowering kit parts."""
+        try:
+            from turn14_sync import sync_lowering_kit_inventory
+            results = sync_lowering_kit_inventory()
+            return jsonify({'ok': True, 'data': results})
+        except Exception as e:
+            return jsonify({'ok': False, 'error': str(e)}), 500
+
+    @app.route('/api/turn14/quote', methods=['POST'])
+    @login_required
+    def turn14_quote():
+        """Get shipping quote for lowering kit to a customer address."""
+        from turn14_sync import get_client, LOWERING_KIT_ITEMS
+        data = request.get_json()
+        ship_to = data.get('ship_to', {})
+        item_keys = data.get('items', list(LOWERING_KIT_ITEMS.keys()))
+        items = [{'item_id': LOWERING_KIT_ITEMS[k]['id'], 'qty': 1} for k in item_keys if k in LOWERING_KIT_ITEMS]
+        try:
+            client = get_client()
+            quotes = client.get_shipping_quote(items, ship_to)
+            return jsonify({'ok': True, 'quotes': quotes})
+        except Exception as e:
+            return jsonify({'ok': False, 'error': str(e)}), 500
 
     # ── Health Check ─────────────────────────────────────────────
 
