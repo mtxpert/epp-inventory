@@ -960,8 +960,15 @@ def register_routes(app):
 
             return jsonify({'ok': True, 'email_body': body, 'companion_po': companion_result})
         except Exception as e:
-            current_app.logger.error(f"send_po error: {e}")
-            return jsonify({'error': str(e)}), 500
+            import traceback
+            tb = traceback.format_exc()
+            current_app.logger.error(f"send_po error: {e}\n{tb}")
+            return jsonify({'error': str(e), 'traceback': tb}), 500
+        except BaseException as e:
+            import traceback
+            tb = traceback.format_exc()
+            current_app.logger.error(f"send_po BaseException: {e}\n{tb}")
+            return jsonify({'error': str(e), 'traceback': tb, 'type': type(e).__name__}), 500
 
     def _send_map_mount_po(nmd_qty, parent_po_number):
         """Auto-create and email a Kevin Wolfe / Powill PO for MAP-SHO mounts.
