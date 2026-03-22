@@ -553,7 +553,7 @@ def register_routes(app):
                     used_in[kc.component.part_number] = []
                 used_in[kc.component.part_number].append(f"{kit.name} (x{kc.quantity})")
 
-        recent_orders = ShopifyOrder.query.order_by(ShopifyOrder.created_at.desc()).limit(20).all()
+        recent_orders = ShopifyOrder.query.order_by(ShopifyOrder.id.desc()).limit(100).all()
         recent_logs = InventoryLog.query.order_by(InventoryLog.created_at.desc()).limit(50).all()
 
         # Calculate "on order" projection: pending POs → projected buildable kits → retail value
@@ -883,10 +883,26 @@ def register_routes(app):
         db.session.commit()
         return jsonify({'ok': True, 'po_id': po.id, 'po_number': po_number})
 
+    def _smtp_send(to_addr, subject, body):
+        """Send email via direct smtplib — bypasses Flask-Mail which hangs on Render."""
+        import smtplib
+        from email.mime.text import MIMEText
+        username = current_app.config.get('MAIL_USERNAME', '')
+        password = current_app.config.get('MAIL_PASSWORD', '')
+        sender = current_app.config.get('MAIL_DEFAULT_SENDER', username)
+        msg = MIMEText(body)
+        msg['Subject'] = subject
+        msg['From'] = sender
+        msg['To'] = to_addr
+        with smtplib.SMTP('smtp.gmail.com', 587, timeout=30) as s:
+            s.ehlo()
+            s.starttls()
+            s.login(username, password)
+            s.sendmail(sender, [to_addr], msg.as_string())
+
     @app.route('/api/po/<int:po_id>/send', methods=['POST'])
     @login_required
     def send_po(po_id):
-        from flask_mail import Message
         po = PurchaseOrder.query.get_or_404(po_id)
         try:
             date_str = po.created_at.strftime('%B %d, %Y') if po.created_at else 'N/A'
@@ -929,12 +945,7 @@ def register_routes(app):
             body += "Please confirm receipt and estimated ship date.\n"
             body += "Thank you,\nMike Bambic\nEco Power Parts\n"
 
-            msg = Message(
-                subject=f"[EPP] Purchase Order {po.po_number}",
-                recipients=[po.supplier.email],
-                body=body
-            )
-            mail.send(msg)
+            _smtp_send(po.supplier.email, f"[EPP] Purchase Order {po.po_number}", body)
             po.status = 'sent'
             po.sent_at = datetime.now(timezone.utc)
             db.session.commit()
@@ -953,7 +964,6 @@ def register_routes(app):
     def _send_map_mount_po(nmd_qty, parent_po_number):
         """Auto-create and email a Kevin Wolfe / Powill PO for MAP-SHO mounts.
         Triggered whenever an NMD PO is sent — Kevin ships direct to Fontana for assembly."""
-        from flask_mail import Message
         try:
             kw = Supplier.query.filter_by(name='Kevin Wolfe / Powill').first()
             map_comp = Component.query.filter_by(part_number='MAP-SHO').first()
@@ -998,12 +1008,7 @@ def register_routes(app):
             body += "Please confirm receipt and estimated ship date.\n"
             body += "Thank you,\nMike Bambic\nEco Power Parts\n(602) 505-0701\n"
 
-            msg = Message(
-                subject=f"[EPP] Purchase Order {po_number} — MAP Sensor Mounts x{nmd_qty}",
-                recipients=[kw.email],
-                body=body
-            )
-            mail.send(msg)
+            _smtp_send(kw.email, f"[EPP] Purchase Order {po_number} — MAP Sensor Mounts x{nmd_qty}", body)
             po.status = 'sent'
             po.sent_at = datetime.now(timezone.utc)
             db.session.commit()
@@ -1042,7 +1047,6 @@ def register_routes(app):
     @login_required
     def send_rfq():
         """Send RFQ email to supplier requesting pricing at multiple qty breaks."""
-        from flask_mail import Message
         data = request.get_json()
         supplier_id = data.get('supplier_id')
         supplier = Supplier.query.get(supplier_id)
@@ -1086,12 +1090,7 @@ def register_routes(app):
         body += f"\nThank you,\nMike Bambic\nEcoPowerParts\ninfo@ecopowerparts.com\n"
 
         try:
-            msg = Message(
-                subject=f"[EPP] Request for Quote — {len(parts)} parts",
-                recipients=[supplier.email],
-                body=body
-            )
-            mail.send(msg)
+            _smtp_send(supplier.email, f"[EPP] Request for Quote — {len(parts)} parts", body)
             return jsonify({'ok': True, 'email_body': body})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
