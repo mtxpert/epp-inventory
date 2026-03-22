@@ -5,7 +5,7 @@ import io
 import csv
 import json
 from datetime import datetime, timezone
-from flask import Flask, render_template, jsonify, request, redirect, url_for, flash, Response
+from flask import Flask, render_template, jsonify, request, redirect, url_for, flash, Response, current_app
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_mail import Mail
 from flask_apscheduler import APScheduler
