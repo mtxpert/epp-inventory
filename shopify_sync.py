@@ -110,33 +110,29 @@ def process_order(order_data):
 
 
 def _smtp_send(to_addrs, subject, body, cc=None):
-    """Send email via SendGrid HTTP API — Render blocks all outbound SMTP ports."""
-    import requests
-    api_key = current_app.config.get('SENDGRID_API_KEY', '')
-    sender = current_app.config.get('MAIL_DEFAULT_SENDER',
-                                    current_app.config.get('MAIL_USERNAME', 'info@ecopowerparts.com'))
-    if not api_key:
-        raise RuntimeError('SENDGRID_API_KEY not configured')
+    """Send email via Gmail SMTP."""
+    import smtplib
+    from email.mime.text import MIMEText
+    username = current_app.config.get('MAIL_USERNAME', '')
+    password = current_app.config.get('MAIL_PASSWORD', '')
+    sender = current_app.config.get('MAIL_DEFAULT_SENDER', username)
+    msg = MIMEText(body)
+    msg['Subject'] = subject
+    msg['From'] = sender
     if isinstance(to_addrs, str):
         to_addrs = [to_addrs]
-    personalization = {'to': [{'email': a} for a in to_addrs]}
+    msg['To'] = ', '.join(to_addrs)
+    all_recipients = list(to_addrs)
     if cc:
         if isinstance(cc, str):
             cc = [cc]
-        personalization['cc'] = [{'email': a} for a in cc]
-    resp = requests.post(
-        'https://api.sendgrid.com/v3/mail/send',
-        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
-        json={
-            'personalizations': [personalization],
-            'from': {'email': sender},
-            'subject': subject,
-            'content': [{'type': 'text/plain', 'value': body}]
-        },
-        timeout=30
-    )
-    if resp.status_code >= 400:
-        raise RuntimeError(f'SendGrid error {resp.status_code}: {resp.text}')
+        msg['Cc'] = ', '.join(cc)
+        all_recipients += cc
+    with smtplib.SMTP('smtp.gmail.com', 587, timeout=30) as s:
+        s.ehlo()
+        s.starttls()
+        s.login(username, password)
+        s.sendmail(sender, all_recipients, msg.as_string())
 
 
 def send_tial_bov_email(order_number, bov_label):

@@ -885,26 +885,21 @@ def register_routes(app):
         return jsonify({'ok': True, 'po_id': po.id, 'po_number': po_number})
 
     def _smtp_send(to_addr, subject, body):
-        """Send email via SendGrid HTTP API — Render blocks all outbound SMTP ports."""
-        import requests
-        api_key = current_app.config.get('SENDGRID_API_KEY', '')
-        sender = current_app.config.get('MAIL_DEFAULT_SENDER',
-                                        current_app.config.get('MAIL_USERNAME', 'info@ecopowerparts.com'))
-        if not api_key:
-            raise RuntimeError('SENDGRID_API_KEY not configured')
-        resp = requests.post(
-            'https://api.sendgrid.com/v3/mail/send',
-            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
-            json={
-                'personalizations': [{'to': [{'email': to_addr}]}],
-                'from': {'email': sender},
-                'subject': subject,
-                'content': [{'type': 'text/plain', 'value': body}]
-            },
-            timeout=30
-        )
-        if resp.status_code >= 400:
-            raise RuntimeError(f'SendGrid error {resp.status_code}: {resp.text}')
+        """Send email via Gmail SMTP."""
+        import smtplib
+        from email.mime.text import MIMEText
+        username = current_app.config.get('MAIL_USERNAME', '')
+        password = current_app.config.get('MAIL_PASSWORD', '')
+        sender = current_app.config.get('MAIL_DEFAULT_SENDER', username)
+        msg = MIMEText(body)
+        msg['Subject'] = subject
+        msg['From'] = sender
+        msg['To'] = to_addr
+        with smtplib.SMTP('smtp.gmail.com', 587, timeout=30) as s:
+            s.ehlo()
+            s.starttls()
+            s.login(username, password)
+            s.sendmail(sender, [to_addr], msg.as_string())
 
     @app.route('/api/po/<int:po_id>/test', methods=['POST'])
     @login_required
