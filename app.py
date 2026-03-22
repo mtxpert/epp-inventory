@@ -895,7 +895,7 @@ def register_routes(app):
         msg['Subject'] = subject
         msg['From'] = sender
         msg['To'] = to_addr
-        with smtplib.SMTP('smtp.forwardemail.net', 2525, timeout=30) as s:
+        with smtplib.SMTP('smtp.gmail.com', 587, timeout=30) as s:
             s.ehlo()
             s.starttls()
             s.login(username, password)
