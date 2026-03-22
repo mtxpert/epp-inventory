@@ -912,6 +912,19 @@ def register_routes(app):
             import traceback
             return jsonify({'error': str(e), 'type': type(e).__name__, 'traceback': traceback.format_exc()}), 500
 
+    @app.route('/api/email-test', methods=['POST'])
+    @login_required
+    def email_test():
+        """Diagnostic: test _smtp_send directly."""
+        try:
+            to = request.json.get('to', 'mbambic@gmail.com') if request.is_json else 'mbambic@gmail.com'
+            _smtp_send(to, '[EPP] Email test', 'This is a test email from EPP inventory.')
+            return jsonify({'ok': True, 'sent_to': to})
+        except Exception as e:
+            import traceback
+            return jsonify({'error': str(e), 'type': type(e).__name__,
+                            'traceback': traceback.format_exc()}), 200
+
     @app.route('/api/po/<int:po_id>/build', methods=['POST'])
     @login_required
     def build_po_body(po_id):
