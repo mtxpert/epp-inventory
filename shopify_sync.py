@@ -109,26 +109,42 @@ def process_order(order_data):
     }
 
 
+def _smtp_send(to_addrs, subject, body, cc=None):
+    """Send email via smtplib — bypasses Flask-Mail which hangs on Render."""
+    import smtplib
+    from email.mime.text import MIMEText
+    username = current_app.config.get('MAIL_USERNAME', '')
+    password = current_app.config.get('MAIL_PASSWORD', '')
+    sender = current_app.config.get('MAIL_DEFAULT_SENDER', username)
+    msg = MIMEText(body)
+    msg['Subject'] = subject
+    msg['From'] = sender
+    if isinstance(to_addrs, str):
+        to_addrs = [to_addrs]
+    msg['To'] = ', '.join(to_addrs)
+    all_recipients = list(to_addrs)
+    if cc:
+        if isinstance(cc, str):
+            cc = [cc]
+        msg['Cc'] = ', '.join(cc)
+        all_recipients += cc
+    with smtplib.SMTP('smtp.gmail.com', 587, timeout=30) as s:
+        s.ehlo()
+        s.starttls()
+        s.login(username, password)
+        s.sendmail(sender, all_recipients, msg.as_string())
+
+
 def send_tial_bov_email(order_number, bov_label):
     """Email FullRace when a Tial BOV is ordered."""
-    from flask_mail import Message
-    from app import mail
-
     subject = f"New Order - Tial {bov_label}"
     body = (
         f"Hey guys need another Tial BoV {bov_label} with 10psi spring please. "
         f"Josh will pick it up once you have it.\n\n"
         f"EPP Order #{order_number}"
     )
-
     try:
-        msg = Message(
-            subject=subject,
-            recipients=[FULLRACE_EMAIL],
-            cc=[JOSH_EMAIL],
-            body=body
-        )
-        mail.send(msg)
+        _smtp_send(FULLRACE_EMAIL, subject, body, cc=JOSH_EMAIL)
         current_app.logger.info(f"Tial BOV email sent for order #{order_number}: {bov_label}")
     except Exception as e:
         current_app.logger.error(f"Failed to send Tial BOV email: {e}")
@@ -189,9 +205,6 @@ def sync_recent_orders(hours=6):
 
 def send_low_stock_alert(components):
     """Send email alert for low stock items."""
-    from flask_mail import Message
-    from app import mail
-
     recipients = current_app.config.get('ALERT_RECIPIENTS', '').split(',')
     recipients = [r.strip() for r in recipients if r.strip()]
     if not recipients:
@@ -218,12 +231,7 @@ def send_low_stock_alert(components):
     body += "View inventory: " + current_app.config.get('APP_URL', 'https://epp-inventory.onrender.com') + "\n"
 
     try:
-        msg = Message(
-            subject=f"[EPP] {'CRITICAL: ' if critical else ''}Low Stock Alert — {len(components)} items",
-            recipients=recipients,
-            body=body
-        )
-        mail.send(msg)
+        _smtp_send(recipients, f"[EPP] {'CRITICAL: ' if critical else ''}Low Stock Alert — {len(components)} items", body)
         current_app.logger.info(f"Low stock alert sent to {recipients}")
     except Exception as e:
         current_app.logger.error(f"Failed to send alert: {e}")
