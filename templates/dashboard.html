@@ -86,7 +86,6 @@
 
 <!-- Tab: Component Inventory -->
 <div id="tab-inventory" class="tab-content active">
-    {% if current_user.role == 'admin' %}
     <details style="margin-bottom: 16px;">
         <summary style="cursor: pointer; color: #4fc3f7; font-size: 14px; padding: 8px 0;">+ Add New Component</summary>
         <div class="card" style="margin-top: 8px;">
@@ -117,7 +116,6 @@
             </div>
         </div>
     </details>
-    {% endif %}
     <input type="text" class="search-box" placeholder="Search components..." oninput="filterComponents(this.value)">
     {% for cat_name, cat_components in categories.items() %}
     <div class="section">

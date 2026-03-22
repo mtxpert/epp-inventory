@@ -735,8 +735,6 @@ def register_routes(app):
     @app.route('/api/component', methods=['POST'])
     @login_required
     def add_component():
-        if current_user.role != 'admin':
-            return jsonify({'error': 'Admin only'}), 403
         data = request.get_json()
         pn = data.get('part_number', '').strip().upper()
         name = data.get('name', '').strip()
