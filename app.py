@@ -959,7 +959,11 @@ def register_routes(app):
             body += "Please confirm receipt and estimated ship date.\n"
             body += "Thank you,\nMike Bambic\nEco Power Parts\n"
 
+            if not po.supplier.email:
+                return jsonify({'error': f'Supplier {po.supplier.name} has no email address'}), 400
+            current_app.logger.info(f"send_po: calling _smtp_send to {po.supplier.email}")
             _smtp_send(po.supplier.email, f"[EPP] Purchase Order {po.po_number}", body)
+            current_app.logger.info(f"send_po: email sent, updating status")
             po.status = 'sent'
             po.sent_at = datetime.now(timezone.utc)
             db.session.commit()
