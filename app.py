@@ -912,6 +912,35 @@ def register_routes(app):
             import traceback
             return jsonify({'error': str(e), 'type': type(e).__name__, 'traceback': traceback.format_exc()}), 500
 
+    @app.route('/api/po/<int:po_id>/build', methods=['POST'])
+    @login_required
+    def build_po_body(po_id):
+        """Diagnostic: build PO body and return it without sending email."""
+        try:
+            po = PurchaseOrder.query.get(po_id)
+            if not po:
+                return jsonify({'error': 'not found'}), 404
+            step = 'start'
+            date_str = po.created_at.strftime('%B %d, %Y') if po.created_at else 'N/A'
+            step = 'date_ok'
+            subtotal = sum(l.qty * (l.unit_cost or 0) for l in po.lines)
+            step = 'subtotal_ok'
+            lines_info = [{'part': l.component.part_number if l.component else 'NONE',
+                           'name': l.component.name if l.component else 'NONE',
+                           'qty': l.qty, 'cost': str(l.unit_cost)} for l in po.lines]
+            step = 'lines_ok'
+            body = ''
+            for line in po.lines:
+                unit = f"${line.unit_cost:.2f}" if line.unit_cost else "TBD"
+                total = f"${line.qty * line.unit_cost:.2f}" if line.unit_cost else "TBD"
+                body += f"{line.component.part_number:<15} {line.component.name:<32} {line.qty:>5} {unit:>8} {total:>9}\n"
+            step = 'format_ok'
+            return jsonify({'ok': True, 'step': step, 'lines': lines_info, 'body_preview': body})
+        except Exception as e:
+            import traceback
+            return jsonify({'error': str(e), 'step': step, 'type': type(e).__name__,
+                            'traceback': traceback.format_exc()}), 500
+
     @app.route('/api/po/<int:po_id>/send', methods=['POST'])
     @login_required
     def send_po(po_id):
