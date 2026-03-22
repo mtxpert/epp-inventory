@@ -903,8 +903,10 @@ def register_routes(app):
     @app.route('/api/po/<int:po_id>/send', methods=['POST'])
     @login_required
     def send_po(po_id):
-        po = PurchaseOrder.query.get_or_404(po_id)
         try:
+            po = PurchaseOrder.query.get(po_id)
+            if not po:
+                return jsonify({'error': f'PO {po_id} not found'}), 404
             date_str = po.created_at.strftime('%B %d, %Y') if po.created_at else 'N/A'
             subtotal = sum(l.qty * (l.unit_cost or 0) for l in po.lines)
 
