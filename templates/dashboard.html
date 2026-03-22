@@ -2,7 +2,8 @@
 {% block title %}Dashboard — EPP Inventory{% endblock %}
 {% block content %}
 
-<!-- Retail Value Banner -->
+<!-- Retail Value Banner (admin only) -->
+{% if current_user.role == 'admin' %}
 <div style="background: linear-gradient(135deg, #1e3a5f 0%, #111827 100%); border: 1px solid #2563eb; border-radius: 12px; padding: 20px 24px; margin-bottom: 20px;">
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
         <div>
@@ -39,6 +40,7 @@
         {% endfor %}
     </div>
 </div>
+{% endif %}
 
 <!-- Summary Cards -->
 <div class="summary-grid">
