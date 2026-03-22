@@ -128,9 +128,7 @@ def _smtp_send(to_addrs, subject, body, cc=None):
             cc = [cc]
         msg['Cc'] = ', '.join(cc)
         all_recipients += cc
-    with smtplib.SMTP('smtp.gmail.com', 587, timeout=30) as s:
-        s.ehlo()
-        s.starttls()
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30) as s:
         s.login(username, password)
         s.sendmail(sender, all_recipients, msg.as_string())
 

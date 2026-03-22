@@ -884,7 +884,7 @@ def register_routes(app):
         return jsonify({'ok': True, 'po_id': po.id, 'po_number': po_number})
 
     def _smtp_send(to_addr, subject, body):
-        """Send email via direct smtplib — bypasses Flask-Mail which hangs on Render."""
+        """Send email via direct smtplib SSL — port 465 works on Render (587/STARTTLS is blocked)."""
         import smtplib
         from email.mime.text import MIMEText
         username = current_app.config.get('MAIL_USERNAME', '')
@@ -894,9 +894,7 @@ def register_routes(app):
         msg['Subject'] = subject
         msg['From'] = sender
         msg['To'] = to_addr
-        with smtplib.SMTP('smtp.gmail.com', 587, timeout=30) as s:
-            s.ehlo()
-            s.starttls()
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30) as s:
             s.login(username, password)
             s.sendmail(sender, [to_addr], msg.as_string())
 
