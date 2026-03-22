@@ -938,10 +938,80 @@ def register_routes(app):
             po.status = 'sent'
             po.sent_at = datetime.now(timezone.utc)
             db.session.commit()
-            return jsonify({'ok': True, 'email_body': body})
+
+            # Auto-companion: if PO contains HP-NMD, send Kevin Wolfe a MAP-SHO PO
+            companion_result = None
+            nmd_qty = sum(l.qty for l in po.lines if l.component.part_number == 'HP-NMD')
+            if nmd_qty > 0:
+                companion_result = _send_map_mount_po(nmd_qty, po.po_number)
+
+            return jsonify({'ok': True, 'email_body': body, 'companion_po': companion_result})
         except Exception as e:
             current_app.logger.error(f"send_po error: {e}")
             return jsonify({'error': str(e)}), 500
+
+    def _send_map_mount_po(nmd_qty, parent_po_number):
+        """Auto-create and email a Kevin Wolfe / Powill PO for MAP-SHO mounts.
+        Triggered whenever an NMD PO is sent — Kevin ships direct to Fontana for assembly."""
+        from flask_mail import Message
+        try:
+            kw = Supplier.query.filter_by(name='Kevin Wolfe / Powill').first()
+            map_comp = Component.query.filter_by(part_number='MAP-SHO').first()
+            if not kw or not map_comp:
+                return {'error': 'Kevin Wolfe supplier or MAP-SHO component not found'}
+
+            count = PurchaseOrder.query.count() + 1
+            po_number = f"EPP-PO-{count:04d}"
+            po = PurchaseOrder(po_number=po_number, supplier_id=kw.id,
+                               notes=f"Companion to {parent_po_number} — ship direct to Fontana")
+            db.session.add(po)
+            db.session.flush()
+            line = PurchaseOrderLine(po_id=po.id, component_id=map_comp.id,
+                                     qty=nmd_qty, unit_cost=0)
+            db.session.add(line)
+
+            date_str = datetime.now(timezone.utc).strftime('%B %d, %Y')
+            body  = "=" * 65 + "\n"
+            body += "                     PURCHASE ORDER\n"
+            body += "=" * 65 + "\n\n"
+            body += "Eco Power Parts\n"
+            body += "910 S Hohokam Dr #118\n"
+            body += "Tempe, AZ 85281\n"
+            body += "Phone: (602) 505-0701\n"
+            body += "info@ecopowerparts.com\n\n"
+            body += f"PO #:  {po_number}\n"
+            body += f"Date:  {date_str}\n"
+            body += f"Ref:   Companion to {parent_po_number}\n\n"
+            body += "VENDOR:\n"
+            body += "  Kevin Wolfe / Powill\n"
+            body += "  kwolfe@powill.com\n\n"
+            body += "SHIP TO:\n"
+            body += "  11027 Jasmine Street\n"
+            body += "  Fontana, California 92337\n\n"
+            body += "-" * 65 + "\n"
+            body += f"{'ITEM':<15} {'DESCRIPTION':<32} {'QTY':>5} {'UNIT':>8}\n"
+            body += "-" * 65 + "\n"
+            body += f"{'MAP-SHO':<15} {'SHO MAP Sensor Mount':<32} {nmd_qty:>5} {'TBD':>8}\n"
+            body += "-" * 65 + "\n\n"
+            body += f"Please ship direct to the Fontana address above.\n"
+            body += f"This order accompanies NMD pipe PO {parent_po_number}.\n\n"
+            body += "Please confirm receipt and estimated ship date.\n"
+            body += "Thank you,\nMike Bambic\nEco Power Parts\n(602) 505-0701\n"
+
+            msg = Message(
+                subject=f"[EPP] Purchase Order {po_number} — MAP Sensor Mounts x{nmd_qty}",
+                recipients=[kw.email],
+                body=body
+            )
+            mail.send(msg)
+            po.status = 'sent'
+            po.sent_at = datetime.now(timezone.utc)
+            db.session.commit()
+            return {'ok': True, 'po_number': po_number, 'qty': nmd_qty}
+        except Exception as e:
+            current_app.logger.error(f"MAP mount companion PO error: {e}")
+            db.session.rollback()
+            return {'error': str(e)}
 
     @app.route('/api/po/<int:po_id>/receive', methods=['POST'])
     @login_required
