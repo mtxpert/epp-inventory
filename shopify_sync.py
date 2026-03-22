@@ -110,27 +110,33 @@ def process_order(order_data):
 
 
 def _smtp_send(to_addrs, subject, body, cc=None):
-    """Send email via smtplib — bypasses Flask-Mail which hangs on Render."""
-    import smtplib
-    from email.mime.text import MIMEText
-    username = current_app.config.get('MAIL_USERNAME', '')
-    password = current_app.config.get('MAIL_PASSWORD', '')
-    sender = current_app.config.get('MAIL_DEFAULT_SENDER', username)
-    msg = MIMEText(body)
-    msg['Subject'] = subject
-    msg['From'] = sender
+    """Send email via SendGrid HTTP API — Render blocks all outbound SMTP ports."""
+    import requests
+    api_key = current_app.config.get('SENDGRID_API_KEY', '')
+    sender = current_app.config.get('MAIL_DEFAULT_SENDER',
+                                    current_app.config.get('MAIL_USERNAME', 'info@ecopowerparts.com'))
+    if not api_key:
+        raise RuntimeError('SENDGRID_API_KEY not configured')
     if isinstance(to_addrs, str):
         to_addrs = [to_addrs]
-    msg['To'] = ', '.join(to_addrs)
-    all_recipients = list(to_addrs)
+    personalization = {'to': [{'email': a} for a in to_addrs]}
     if cc:
         if isinstance(cc, str):
             cc = [cc]
-        msg['Cc'] = ', '.join(cc)
-        all_recipients += cc
-    with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30) as s:
-        s.login(username, password)
-        s.sendmail(sender, all_recipients, msg.as_string())
+        personalization['cc'] = [{'email': a} for a in cc]
+    resp = requests.post(
+        'https://api.sendgrid.com/v3/mail/send',
+        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+        json={
+            'personalizations': [personalization],
+            'from': {'email': sender},
+            'subject': subject,
+            'content': [{'type': 'text/plain', 'value': body}]
+        },
+        timeout=30
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f'SendGrid error {resp.status_code}: {resp.text}')
 
 
 def send_tial_bov_email(order_number, bov_label):
