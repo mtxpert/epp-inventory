@@ -5,6 +5,7 @@ from flask import current_app
 from flask_mail import Message
 
 SHIPSTATION_BASE = "https://api.shipstation.com/v2"
+SHIPSTATION_V1_BASE = "https://ssapi.shipstation.com"
 
 # Warehouse IDs
 WH_TEMPE = "se-1762487"
@@ -33,6 +34,56 @@ SHOPIFY_LOCATION_ID = 67632070811
 def _headers():
     key = current_app.config.get("SHIPSTATION_API_KEY", "")
     return {"API-Key": key, "Content-Type": "application/json"}
+
+
+def _v1_auth():
+    import base64
+    key = current_app.config.get("SHIPSTATION_V1_KEY", "")
+    secret = current_app.config.get("SHIPSTATION_V1_SECRET", "")
+    token = base64.b64encode(f"{key}:{secret}".encode()).decode()
+    return {"Authorization": f"Basic {token}", "Content-Type": "application/json"}
+
+
+def _find_shipstation_order_id(order_number):
+    """Look up ShipStation v1 order ID by order number."""
+    r = requests.get(
+        f"{SHIPSTATION_V1_BASE}/orders",
+        params={"orderNumber": str(order_number)},
+        headers=_v1_auth(),
+        timeout=15
+    )
+    if not r.ok:
+        return None
+    orders = r.json().get("orders", [])
+    return orders[0]["orderId"] if orders else None
+
+
+def mark_shipped_v1(order_number, tracking_number, carrier_code, ship_date=None):
+    """Mark a ShipStation order as shipped via v1 API so the order list shows 'Shipped'."""
+    if not ship_date:
+        ship_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    order_id = _find_shipstation_order_id(order_number)
+    if not order_id:
+        current_app.logger.warning(f"ShipStation v1: order #{order_number} not found, skipping markasshipped")
+        return None
+    payload = {
+        "orderId": order_id,
+        "carrierCode": (carrier_code or "").lower(),
+        "shipDate": ship_date,
+        "trackingNumber": tracking_number,
+        "notifyCustomer": False,
+        "notifySalesChannel": True,
+    }
+    r = requests.post(
+        f"{SHIPSTATION_V1_BASE}/orders/markasshipped",
+        json=payload,
+        headers=_v1_auth(),
+        timeout=15
+    )
+    if r.ok:
+        return r.json()
+    current_app.logger.error(f"ShipStation v1 markasshipped failed for #{order_number}: {r.status_code} {r.text}")
+    return None
 
 
 def _kit_shipping_config(kit_name, qty=1):
@@ -83,6 +134,16 @@ def create_label(order_number, kit_name, qty, ship_to, order_total=0):
     wh_id, carrier_id, service_code, packages = _kit_shipping_config(kit_name, qty)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
+    # Warn if balance is getting low (< $50)
+    try:
+        bal = get_balance()
+        if bal:
+            balance_val = float(bal.get("balance", bal.get("amount", 999)) or 999)
+            if balance_val < 50:
+                current_app.logger.warning(f"ShipStation balance low: ${balance_val:.2f} — top up soon")
+    except Exception:
+        pass
+
     shipment = {
         "carrier_id": carrier_id,
         "service_code": service_code,
@@ -104,6 +165,39 @@ def create_label(order_number, kit_name, qty, ship_to, order_total=0):
         json=payload,
         headers=_headers(),
         timeout=30
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def get_balance():
+    """Return ShipStation account balance dict or None on error."""
+    try:
+        r = requests.get(
+            f"{SHIPSTATION_BASE}/accounts/list",
+            headers=_headers(),
+            timeout=10
+        )
+        if r.ok:
+            data = r.json()
+            # v2 returns list; grab first account's balance
+            accounts = data if isinstance(data, list) else data.get("accounts", [])
+            if accounts:
+                return accounts[0]
+    except Exception:
+        pass
+    return None
+
+
+def void_label(label_id):
+    """
+    Void a ShipStation label and get a credit refund.
+    Returns API response dict or raises on error.
+    """
+    r = requests.delete(
+        f"{SHIPSTATION_BASE}/labels/{label_id}",
+        headers=_headers(),
+        timeout=15
     )
     r.raise_for_status()
     return r.json()
@@ -255,6 +349,14 @@ def auto_ship_order(order_number, shopify_order_id, kit_name, qty, ship_to, orde
         current_app.logger.error(f"Shopify fulfillment error for #{order_number}: {e}")
         result["shopify_fulfilled"] = False
         result["fulfillment_error"] = str(e)
+
+    # 4. Mark ShipStation order as shipped (v1 API) so order list shows "Shipped"
+    try:
+        v1_result = mark_shipped_v1(order_number, tracking, label.get("carrier_code", ""))
+        result["shipstation_marked_shipped"] = bool(v1_result)
+    except Exception as e:
+        current_app.logger.error(f"ShipStation v1 markasshipped error for #{order_number}: {e}")
+        result["shipstation_marked_shipped"] = False
 
     result["status"] = "ok"
     return result

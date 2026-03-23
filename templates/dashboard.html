@@ -205,7 +205,7 @@
         {% if recent_orders %}
         <table>
             <thead>
-                <tr><th>Order #</th><th>Shopify ID</th><th>Total</th><th>Processed</th><th>Synced At</th></tr>
+                <tr><th>Order #</th><th>Shopify ID</th><th>Total</th><th>Processed</th><th>Synced At</th><th>Ship</th></tr>
             </thead>
             <tbody>
                 {% for order in recent_orders %}
@@ -221,6 +221,7 @@
                         {% endif %}
                     </td>
                     <td style="color: #64748b; font-size: 12px;">{{ order.created_at.strftime('%Y-%m-%d %H:%M') if order.created_at else '-' }}</td>
+                    <td><button class="btn" style="padding:3px 10px;font-size:12px;background:#2563eb;color:#fff;" onclick="shipOrder('{{ order.shopify_order_id }}', this)" title="Buy label &amp; notify Josh">Ship</button></td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -483,6 +484,33 @@ async function syncOrders(hours) {
     btn.disabled = false;
     fullBtn.disabled = false;
     btn.textContent = 'Sync Orders';
+}
+
+async function shipOrder(shopifyOrderId, btn) {
+    if (!confirm('Buy ShipStation label and notify Josh for this order?')) return;
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Shipping...';
+    try {
+        const r = await fetch(`/api/ship/${shopifyOrderId}`, {method:'POST'});
+        const data = await r.json();
+        const results = data.results || [data];
+        const ok = results.every(x => x.status === 'ok');
+        const tracking = results.map(x => x.tracking_number).filter(Boolean).join(', ');
+        if (ok) {
+            btn.textContent = tracking || 'Shipped';
+            btn.style.background = '#16a34a';
+        } else {
+            const err = results.map(x => x.error || 'unknown error').join('; ');
+            alert('Ship failed: ' + err);
+            btn.textContent = orig;
+            btn.disabled = false;
+        }
+    } catch(e) {
+        alert('Ship error: ' + e);
+        btn.textContent = orig;
+        btn.disabled = false;
+    }
 }
 </script>
 {% endblock %}

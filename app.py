@@ -45,6 +45,8 @@ def create_app():
     app.config['TURN14_CLIENT_ID'] = os.environ.get('TURN14_CLIENT_ID', 'd6a481e8739ac6112389ef3dbaef9badc729149f')
     app.config['TURN14_CLIENT_SECRET'] = os.environ.get('TURN14_CLIENT_SECRET', '3f284c18997e2800f6a5e8d08fc931bddf79088e')
     app.config['SHIPSTATION_API_KEY'] = os.environ.get('SHIPSTATION_API_KEY', '/SLigMj4jFQo1Rr7p7Z9kGy0urmWHlSWUf5l31OAvVI')
+    app.config['SHIPSTATION_V1_KEY'] = os.environ.get('SHIPSTATION_V1_KEY', '1278a66a6ffb46ca8d7deb1a3d177c55')
+    app.config['SHIPSTATION_V1_SECRET'] = os.environ.get('SHIPSTATION_V1_SECRET', 'fd915e301f8b4fb6af3063ebb7c96156')
 
     # Mail config
     app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
@@ -1612,6 +1614,27 @@ def register_routes(app):
                                           order_total=order_total, line_items=all_line_items)
             results.append(ship_result)
         return jsonify({'results': results})
+
+    # ── Void ShipStation Label ──────────────────────────────────
+
+    @app.route('/api/label/<label_id>/void', methods=['POST'])
+    @login_required
+    def void_label_route(label_id):
+        """Void a purchased ShipStation label and reclaim the credit."""
+        from shipstation import void_label
+        try:
+            result = void_label(label_id)
+            return jsonify({'ok': True, 'result': result})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 400
+
+    @app.route('/api/shipstation/balance', methods=['GET'])
+    @login_required
+    def shipstation_balance():
+        """Return current ShipStation account balance."""
+        from shipstation import get_balance
+        bal = get_balance()
+        return jsonify(bal or {'error': 'Could not fetch balance'})
 
     # ── Update Kit Prices (one-time migration) ──────────────────
 
