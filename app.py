@@ -1545,7 +1545,8 @@ def register_routes(app):
             'phone': sa.get('phone', '') or '4805550000',
         }
         order_total = float(order_data.get('total_price', 0) or 0)
-        for item in order_data.get('line_items', []):
+        all_line_items = order_data.get('line_items', [])
+        for item in all_line_items:
             product_id = str(item.get('product_id', ''))
             qty = item.get('quantity', 1)
             variant_title = (item.get('variant_title') or '').lower()
@@ -1558,7 +1559,8 @@ def register_routes(app):
                     if k.shopify_variant and k.shopify_variant.lower() in variant_title:
                         matched_kit = k
                         break
-            auto_ship_order(order_number, shopify_order_id, matched_kit.name, qty, ship_to, order_total=order_total)
+            auto_ship_order(order_number, shopify_order_id, matched_kit.name, qty, ship_to,
+                            order_total=order_total, line_items=all_line_items)
 
     @app.route('/api/ship/<shopify_order_id>', methods=['POST'])
     @login_required
@@ -1590,8 +1592,9 @@ def register_routes(app):
         }
         order_number = str(order_data.get('order_number', ''))
         order_total = float(order_data.get('total_price', 0) or 0)
+        all_line_items = order_data.get('line_items', [])
         results = []
-        for item in order_data.get('line_items', []):
+        for item in all_line_items:
             product_id = str(item.get('product_id', ''))
             qty = item.get('quantity', 1)
             variant_title = (item.get('variant_title') or '').lower()
@@ -1605,7 +1608,8 @@ def register_routes(app):
                     if k.shopify_variant and k.shopify_variant.lower() in variant_title:
                         matched_kit = k
                         break
-            ship_result = auto_ship_order(order_number, shopify_order_id, matched_kit.name, qty, ship_to, order_total=order_total)
+            ship_result = auto_ship_order(order_number, shopify_order_id, matched_kit.name, qty, ship_to,
+                                          order_total=order_total, line_items=all_line_items)
             results.append(ship_result)
         return jsonify({'results': results})
 

@@ -26,6 +26,7 @@ PKG_USPS_MEDIUM_FR = "medium_flat_rate_box"
 PKG_USPS_PADDED   = "flat_rate_padded_envelope"
 
 JOSH_EMAIL = "Durmajdesigns@gmail.com"
+MIKE_EMAIL = "info@ecopowerparts.com"
 SHOPIFY_LOCATION_ID = 67632070811
 
 
@@ -123,23 +124,43 @@ def _fetch_label_pdf(label_data):
     return None
 
 
-def email_label_to_josh(order_number, kit_name, recipient_name, label_data):
+def email_label_to_josh(order_number, kit_name, recipient_name, label_data, line_items=None):
     """Email 4×6 label PDF and order details to Josh."""
     from app import mail
     tracking = label_data.get("tracking_number", "N/A")
     carrier = (label_data.get("carrier_code") or "").upper()
     service = (label_data.get("service_code") or "").replace("_", " ").title()
 
+    # Build order options block (no prices)
+    options_lines = []
+    for item in (line_items or []):
+        title = item.get("title", "")
+        # Strip price suffix like " (+$150.00)" from title
+        import re
+        clean_title = re.sub(r'\s*\(\+?\$[\d.,]+\)', '', title).strip()
+        variant = item.get("variant_title") or ""
+        props = item.get("properties") or []
+        line = f"  • {clean_title}"
+        if variant:
+            line += f" — {variant}"
+        for p in props:
+            if p.get("name") and p.get("value"):
+                line += f"\n      {p['name']}: {p['value']}"
+        options_lines.append(line)
+
+    options_block = "\n".join(options_lines) if options_lines else f"  • {kit_name}"
+
     msg = Message(
         subject=f"[SHIP] Order #{order_number} — {kit_name}",
         recipients=[JOSH_EMAIL],
+        cc=[MIKE_EMAIL],
         body=(
             f"Order to ship:\n\n"
             f"Order #:  {order_number}\n"
-            f"Product:  {kit_name}\n"
             f"Ship To:  {recipient_name}\n"
             f"Service:  {carrier} {service}\n"
             f"Tracking: {tracking}\n\n"
+            f"Items:\n{options_block}\n\n"
             f"Label attached — print at 4×6.\n\n"
             f"— EPP Inventory"
         )
@@ -193,10 +214,11 @@ def fulfill_shopify_order(shopify_order_id, tracking_number, carrier_code):
     return r.json()
 
 
-def auto_ship_order(order_number, shopify_order_id, kit_name, qty, ship_to, order_total=0):
+def auto_ship_order(order_number, shopify_order_id, kit_name, qty, ship_to, order_total=0, line_items=None):
     """
     Full auto-ship: buy label → email Josh → fulfill Shopify order.
     order_total: full order value — triggers adult signature if >= $750.
+    line_items: all Shopify line items (for options/color in Josh's email).
     Returns result dict with tracking_number and status flags.
     """
     result = {"order_number": order_number, "kit_name": kit_name}
@@ -216,7 +238,7 @@ def auto_ship_order(order_number, shopify_order_id, kit_name, qty, ship_to, orde
 
     # 2. Email Josh
     try:
-        email_label_to_josh(order_number, kit_name, ship_to.get("name", ""), label)
+        email_label_to_josh(order_number, kit_name, ship_to.get("name", ""), label, line_items=line_items)
         result["josh_notified"] = True
     except Exception as e:
         current_app.logger.error(f"Josh email error for #{order_number}: {e}")
