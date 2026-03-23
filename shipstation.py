@@ -159,17 +159,33 @@ def fulfill_shopify_order(shopify_order_id, tracking_number, carrier_code):
         return None
     company_map = {"ups": "UPS", "usps": "USPS", "fedex": "FedEx"}
     company = company_map.get((carrier_code or "").lower(), (carrier_code or "").upper())
-    url = f"https://{store}/admin/api/2024-01/orders/{shopify_order_id}/fulfillments.json"
+
+    # Get fulfillment order ID first
+    fo_r = requests.get(
+        f"https://{store}/admin/api/2024-01/orders/{shopify_order_id}/fulfillment_orders.json",
+        headers={"X-Shopify-Access-Token": token},
+        timeout=15
+    )
+    fo_r.raise_for_status()
+    fulfillment_orders = fo_r.json().get("fulfillment_orders", [])
+    open_fos = [fo["id"] for fo in fulfillment_orders if fo["status"] == "open"]
+    if not open_fos:
+        return {"error": "no open fulfillment orders"}
+
     payload = {
         "fulfillment": {
-            "location_id": SHOPIFY_LOCATION_ID,
-            "tracking_number": tracking_number,
-            "tracking_company": company,
             "notify_customer": True,
+            "tracking_info": {
+                "number": tracking_number,
+                "company": company,
+            },
+            "line_items_by_fulfillment_order": [
+                {"fulfillment_order_id": fo_id} for fo_id in open_fos
+            ],
         }
     }
     r = requests.post(
-        url,
+        f"https://{store}/admin/api/2024-01/fulfillments.json",
         json=payload,
         headers={"X-Shopify-Access-Token": token, "Content-Type": "application/json"},
         timeout=15
