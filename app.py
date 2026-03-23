@@ -44,6 +44,7 @@ def create_app():
     app.config['MOUSER_API_KEY'] = os.environ.get('MOUSER_API_KEY', '')
     app.config['TURN14_CLIENT_ID'] = os.environ.get('TURN14_CLIENT_ID', 'd6a481e8739ac6112389ef3dbaef9badc729149f')
     app.config['TURN14_CLIENT_SECRET'] = os.environ.get('TURN14_CLIENT_SECRET', '3f284c18997e2800f6a5e8d08fc931bddf79088e')
+    app.config['SHIPSTATION_API_KEY'] = os.environ.get('SHIPSTATION_API_KEY', '/SLigMj4jFQo1Rr7p7Z9kGy0urmWHlSWUf5l31OAvVI')
 
     # Mail config
     app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
@@ -1516,7 +1517,95 @@ def register_routes(app):
             if low:
                 send_low_stock_alert(low)
 
+        # Auto-ship: buy label, email Josh, fulfill Shopify
+        if result.get('status') not in ('already_processed',) and result.get('deductions'):
+            try:
+                from shipstation import auto_ship_order
+                _auto_ship_from_order(order_data, result)
+            except Exception as e:
+                current_app.logger.error(f"Auto-ship error: {e}")
+
         return jsonify(result), 200
+
+    def _auto_ship_from_order(order_data, process_result):
+        """Extract ship_to and kit info from order data, then trigger auto_ship_order."""
+        from shipstation import auto_ship_order
+        from models import Kit
+        order_number = str(order_data.get('order_number', ''))
+        shopify_order_id = str(order_data.get('id', ''))
+        sa = order_data.get('shipping_address') or order_data.get('billing_address') or {}
+        ship_to = {
+            'name': sa.get('name', ''),
+            'address_line1': sa.get('address1', ''),
+            'address_line2': sa.get('address2', '') or '',
+            'city_locality': sa.get('city', ''),
+            'state_province': sa.get('province_code', sa.get('province', '')),
+            'postal_code': sa.get('zip', ''),
+            'country_code': sa.get('country_code', 'US'),
+            'phone': sa.get('phone', '') or '4805550000',
+        }
+        for item in order_data.get('line_items', []):
+            product_id = str(item.get('product_id', ''))
+            qty = item.get('quantity', 1)
+            variant_title = (item.get('variant_title') or '').lower()
+            kits = Kit.query.filter_by(shopify_id=product_id).all()
+            if not kits:
+                continue
+            matched_kit = kits[0]
+            if len(kits) > 1:
+                for k in kits:
+                    if k.shopify_variant and k.shopify_variant.lower() in variant_title:
+                        matched_kit = k
+                        break
+            auto_ship_order(order_number, shopify_order_id, matched_kit.name, qty, ship_to)
+
+    @app.route('/api/ship/<shopify_order_id>', methods=['POST'])
+    @login_required
+    def manual_ship(shopify_order_id):
+        """Manually trigger label purchase for a Shopify order (for testing)."""
+        from shipstation import auto_ship_order
+        from models import Kit
+        import requests as req
+        token = app.config.get('SHOPIFY_TOKEN', '')
+        store = app.config.get('SHOPIFY_STORE', 'edf236-3.myshopify.com')
+        r = req.get(
+            f"https://{store}/admin/api/2024-01/orders/{shopify_order_id}.json",
+            headers={"X-Shopify-Access-Token": token},
+            timeout=15
+        )
+        if not r.ok:
+            return jsonify({'error': f'Shopify order fetch failed: {r.status_code}'}), 400
+        order_data = r.json().get('order', {})
+        sa = order_data.get('shipping_address') or order_data.get('billing_address') or {}
+        ship_to = {
+            'name': sa.get('name', ''),
+            'address_line1': sa.get('address1', ''),
+            'address_line2': sa.get('address2', '') or '',
+            'city_locality': sa.get('city', ''),
+            'state_province': sa.get('province_code', sa.get('province', '')),
+            'postal_code': sa.get('zip', ''),
+            'country_code': sa.get('country_code', 'US'),
+            'phone': sa.get('phone', '') or '4805550000',
+        }
+        order_number = str(order_data.get('order_number', ''))
+        results = []
+        for item in order_data.get('line_items', []):
+            product_id = str(item.get('product_id', ''))
+            qty = item.get('quantity', 1)
+            variant_title = (item.get('variant_title') or '').lower()
+            kits = Kit.query.filter_by(shopify_id=product_id).all()
+            if not kits:
+                results.append({'item': item.get('title'), 'status': 'no_kit_match'})
+                continue
+            matched_kit = kits[0]
+            if len(kits) > 1:
+                for k in kits:
+                    if k.shopify_variant and k.shopify_variant.lower() in variant_title:
+                        matched_kit = k
+                        break
+            ship_result = auto_ship_order(order_number, shopify_order_id, matched_kit.name, qty, ship_to)
+            results.append(ship_result)
+        return jsonify({'results': results})
 
     # ── Update Kit Prices (one-time migration) ──────────────────
 
