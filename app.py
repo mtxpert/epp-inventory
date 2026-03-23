@@ -1544,6 +1544,7 @@ def register_routes(app):
             'country_code': sa.get('country_code', 'US'),
             'phone': sa.get('phone', '') or '4805550000',
         }
+        order_total = float(order_data.get('total_price', 0) or 0)
         for item in order_data.get('line_items', []):
             product_id = str(item.get('product_id', ''))
             qty = item.get('quantity', 1)
@@ -1557,7 +1558,7 @@ def register_routes(app):
                     if k.shopify_variant and k.shopify_variant.lower() in variant_title:
                         matched_kit = k
                         break
-            auto_ship_order(order_number, shopify_order_id, matched_kit.name, qty, ship_to)
+            auto_ship_order(order_number, shopify_order_id, matched_kit.name, qty, ship_to, order_total=order_total)
 
     @app.route('/api/ship/<shopify_order_id>', methods=['POST'])
     @login_required
@@ -1588,6 +1589,7 @@ def register_routes(app):
             'phone': sa.get('phone', '') or '4805550000',
         }
         order_number = str(order_data.get('order_number', ''))
+        order_total = float(order_data.get('total_price', 0) or 0)
         results = []
         for item in order_data.get('line_items', []):
             product_id = str(item.get('product_id', ''))
@@ -1603,7 +1605,7 @@ def register_routes(app):
                     if k.shopify_variant and k.shopify_variant.lower() in variant_title:
                         matched_kit = k
                         break
-            ship_result = auto_ship_order(order_number, shopify_order_id, matched_kit.name, qty, ship_to)
+            ship_result = auto_ship_order(order_number, shopify_order_id, matched_kit.name, qty, ship_to, order_total=order_total)
             results.append(ship_result)
         return jsonify({'results': results})
 

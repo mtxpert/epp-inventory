@@ -72,26 +72,31 @@ def _kit_shipping_config(kit_name, qty=1):
     ]
 
 
-def create_label(order_number, kit_name, qty, ship_to):
+def create_label(order_number, kit_name, qty, ship_to, order_total=0):
     """
     Purchase a shipping label via ShipStation v2.
     ship_to: {name, address_line1, city_locality, state_province, postal_code, country_code}
+    order_total: float — orders >= $750 get adult signature required (PayPal seller protection).
     Returns the full label response dict.
     """
     wh_id, carrier_id, service_code, packages = _kit_shipping_config(kit_name, qty)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
+    shipment = {
+        "carrier_id": carrier_id,
+        "service_code": service_code,
+        "ship_date": today,
+        "warehouse_id": wh_id,
+        "ship_to": ship_to,
+        "packages": packages,
+    }
+    if float(order_total or 0) >= 750:
+        shipment["confirmation"] = "adult_signature"
+
     payload = {
         "label_format": "pdf",
         "label_layout": "4x6",
-        "shipment": {
-            "carrier_id": carrier_id,
-            "service_code": service_code,
-            "ship_date": today,
-            "warehouse_id": wh_id,
-            "ship_to": ship_to,
-            "packages": packages,
-        }
+        "shipment": shipment,
     }
     r = requests.post(
         f"{SHIPSTATION_BASE}/labels",
@@ -172,16 +177,17 @@ def fulfill_shopify_order(shopify_order_id, tracking_number, carrier_code):
     return r.json()
 
 
-def auto_ship_order(order_number, shopify_order_id, kit_name, qty, ship_to):
+def auto_ship_order(order_number, shopify_order_id, kit_name, qty, ship_to, order_total=0):
     """
     Full auto-ship: buy label → email Josh → fulfill Shopify order.
+    order_total: full order value — triggers adult signature if >= $750.
     Returns result dict with tracking_number and status flags.
     """
     result = {"order_number": order_number, "kit_name": kit_name}
 
     # 1. Buy label
     try:
-        label = create_label(order_number, kit_name, qty, ship_to)
+        label = create_label(order_number, kit_name, qty, ship_to, order_total=order_total)
         tracking = label.get("tracking_number")
         result["tracking_number"] = tracking
         result["carrier"] = label.get("carrier_code")
