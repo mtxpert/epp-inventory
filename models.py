@@ -178,6 +178,16 @@ class InvoiceLine(db.Model):
         return self.qty * self.unit_cost
 
 
+class Turn14OrderLog(db.Model):
+    """Tracks every order placed via Turn14 API — used to enforce 60-day access rule."""
+    __tablename__ = 'turn14_order_log'
+    id = db.Column(db.Integer, primary_key=True)
+    po_number = db.Column(db.String(50), nullable=False)
+    t14_order_id = db.Column(db.String(50))
+    environment = db.Column(db.String(20), default='production')
+    placed_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class ShopifyOrder(db.Model):
     __tablename__ = 'shopify_orders'
     id = db.Column(db.Integer, primary_key=True)

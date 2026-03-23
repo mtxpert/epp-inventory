@@ -11,7 +11,7 @@ from flask_mail import Mail
 from flask_apscheduler import APScheduler
 from models import (db, User, Component, Kit, KitComponent, InventoryLog, ShopifyOrder,
                      Supplier, SupplierComponent, PurchaseOrder, PurchaseOrderLine,
-                     InventorySnapshot, Invoice, InvoiceLine)
+                     InventorySnapshot, Invoice, InvoiceLine, Turn14OrderLog)
 
 mail = Mail()
 scheduler = APScheduler()
@@ -88,6 +88,14 @@ def create_app():
             'trigger': 'interval',
             'hours': 1,
             'misfire_grace_time': 900
+        },
+        {
+            'id': 't14_access_check',
+            'func': 'app:scheduled_t14_access_check',
+            'trigger': 'cron',
+            'hour': 9,
+            'minute': 7,
+            'misfire_grace_time': 3600
         }
     ]
 
@@ -416,6 +424,60 @@ def scheduled_turn14_sync():
             app.logger.info(f"Turn14 sync complete. In stock: {in_stock}")
         except Exception as e:
             app.logger.error(f"Turn14 sync failed: {e}")
+
+
+def scheduled_t14_access_check():
+    """Daily 9:07am — warn if no Turn14 API order in 55+ days (access revoked at 60 days)."""
+    with app.app_context():
+        try:
+            last = Turn14OrderLog.query.filter_by(environment='production').order_by(
+                Turn14OrderLog.placed_at.desc()
+            ).first()
+            now = datetime.now(timezone.utc)
+            if last is None:
+                # No production orders yet — use the approval date as baseline
+                baseline = datetime(2026, 3, 23, tzinfo=timezone.utc)
+                days_since = (now - baseline).days
+            else:
+                placed_at = last.placed_at
+                if placed_at.tzinfo is None:
+                    placed_at = placed_at.replace(tzinfo=timezone.utc)
+                days_since = (now - placed_at).days
+
+            if days_since >= 60:
+                # Email Mark Eder AND ourselves
+                subject = "Turn14 API Access — Requesting Continued Access (EcoPowerParts)"
+                body = (
+                    f"Hi Mark,\n\n"
+                    f"We're reaching out to maintain our Turn14 API integration for EcoPowerParts. "
+                    f"It has been {days_since} days since our last production API order. "
+                    f"We'd like to keep our access active — please let us know if any action "
+                    f"is needed on our end.\n\n"
+                    f"Thank you,\nMike Bambic\nEcoPowerParts\ninfo@ecopowerparts.com"
+                )
+                for recipient in ['apisupport@turn14.com', 'info@ecopowerparts.com']:
+                    msg = Message(subject=subject, recipients=[recipient], body=body)
+                    mail.send(msg)
+                app.logger.warning(f"Turn14 access check: {days_since} days — emailed Mark Eder")
+            elif days_since >= 55:
+                # Internal warning only
+                msg = Message(
+                    subject=f"[EPP WARNING] Turn14 API access expires in {60 - days_since} days",
+                    recipients=['info@ecopowerparts.com'],
+                    body=(
+                        f"Turn14 API access will be revoked in {60 - days_since} days "
+                        f"unless a production order is placed.\n\n"
+                        f"Last production order: {last.po_number if last else 'never'}\n"
+                        f"Days since last order: {days_since}\n\n"
+                        f"Place an order or contact Mark Eder at apisupport@turn14.com."
+                    )
+                )
+                mail.send(msg)
+                app.logger.warning(f"Turn14 access check: {days_since} days — internal warning sent")
+            else:
+                app.logger.info(f"Turn14 access check: {days_since} days since last order — OK")
+        except Exception as e:
+            app.logger.error(f"Turn14 access check failed: {e}")
 
 
 def register_routes(app):
@@ -816,7 +878,8 @@ def register_routes(app):
         if Kit.query.filter_by(slug=slug).first():
             return jsonify({'error': 'Kit slug already exists'}), 400
 
-        kit = Kit(slug=slug, name=name, shopify_id=shopify_id, shopify_variant=shopify_variant)
+        retail_price = float(data.get('retail_price', 0) or 0)
+        kit = Kit(slug=slug, name=name, shopify_id=shopify_id, shopify_variant=shopify_variant, retail_price=retail_price)
         db.session.add(kit)
         db.session.flush()
 
@@ -840,6 +903,8 @@ def register_routes(app):
         kit.name = data.get('name', kit.name)
         kit.shopify_id = data.get('shopify_id', kit.shopify_id) or None
         kit.shopify_variant = data.get('shopify_variant', kit.shopify_variant) or None
+        if 'retail_price' in data:
+            kit.retail_price = float(data['retail_price'] or 0)
 
         if 'components' in data:
             KitComponent.query.filter_by(kit_id=kit.id).delete()
@@ -1496,6 +1561,29 @@ def register_routes(app):
             client = get_client()
             quotes = client.get_shipping_quote(items, ship_to)
             return jsonify({'ok': True, 'quotes': quotes})
+        except Exception as e:
+            return jsonify({'ok': False, 'error': str(e)}), 500
+
+    @app.route('/api/turn14/order', methods=['POST'])
+    @login_required
+    def turn14_place_order():
+        """Place a Turn14 dropship order and log it for access-expiry tracking."""
+        from turn14_sync import get_client
+        data = request.get_json()
+        po_number = data.get('po_number', '').strip()
+        quote_id = data.get('quote_id')
+        shipping_ids = data.get('shipping_ids', [])
+        environment = data.get('environment', 'production')
+        if not po_number or not quote_id or not shipping_ids:
+            return jsonify({'error': 'po_number, quote_id, and shipping_ids required'}), 400
+        try:
+            client = get_client()
+            result = client.place_order(po_number, int(quote_id), [int(s) for s in shipping_ids], environment)
+            order_id = str(result.get('data', {}).get('id', ''))
+            log = Turn14OrderLog(po_number=po_number, t14_order_id=order_id, environment=environment)
+            db.session.add(log)
+            db.session.commit()
+            return jsonify({'ok': True, 'order': result})
         except Exception as e:
             return jsonify({'ok': False, 'error': str(e)}), 500
 
