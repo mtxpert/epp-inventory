@@ -1644,7 +1644,7 @@ def register_routes(app):
         db.session.commit()
         return jsonify({'ok': True, 'email': email})
 
-        @app.route('/api/shipstation/balance', methods=['GET'])
+    @app.route('/api/shipstation/balance', methods=['GET'])
     @login_required
     def shipstation_balance():
         """Return current ShipStation account balance."""
