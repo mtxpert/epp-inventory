@@ -324,6 +324,8 @@ def auto_ship_order(order_number, shopify_order_id, kit_name, qty, ship_to, orde
         result["tracking_number"] = tracking
         result["carrier"] = label.get("carrier_code")
         result["label_id"] = label.get("label_id")
+        downloads = label.get("label_download", {})
+        result["label_url"] = downloads.get("pdf") or downloads.get("href")
         current_app.logger.info(f"Label purchased for #{order_number}: {tracking}")
     except Exception as e:
         current_app.logger.error(f"ShipStation label error for #{order_number}: {e}")

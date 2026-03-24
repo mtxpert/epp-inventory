@@ -99,6 +99,13 @@ def create_app():
             'hour': 9,
             'minute': 7,
             'misfire_grace_time': 3600
+        },
+        {
+            'id': 'keep_alive',
+            'func': 'app:scheduled_keep_alive',
+            'trigger': 'interval',
+            'minutes': 10,
+            'misfire_grace_time': 120
         }
     ]
 
@@ -117,6 +124,18 @@ def create_app():
         if 'retail_price' not in kit_cols:
             db.session.execute(db.text("ALTER TABLE kits ADD COLUMN retail_price FLOAT DEFAULT 0"))
             db.session.commit()
+        # Add shipping label columns to shopify_orders if missing
+        order_cols = [c['name'] for c in inspector.get_columns('shopify_orders')]
+        for col_name, col_def in [
+            ('tracking_number', 'VARCHAR(100)'),
+            ('carrier_code', 'VARCHAR(30)'),
+            ('label_id', 'VARCHAR(100)'),
+            ('label_url', 'TEXT'),
+            ('shipped_at', 'TIMESTAMP'),
+        ]:
+            if col_name not in order_cols:
+                db.session.execute(db.text(f"ALTER TABLE shopify_orders ADD COLUMN {col_name} {col_def}"))
+        db.session.commit()
         # Add unit_cost column to components if missing (must be before any Component queries)
         comp_cols = [c['name'] for c in inspector.get_columns('components')]
         if 'unit_cost' not in comp_cols:
@@ -481,6 +500,18 @@ def scheduled_t14_access_check():
                 app.logger.info(f"Turn14 access check: {days_since} days since last order — OK")
         except Exception as e:
             app.logger.error(f"Turn14 access check failed: {e}")
+
+
+def scheduled_keep_alive():
+    """Ping our own /health endpoint every 10 minutes to prevent Render from spinning down."""
+    import requests as req
+    with app.app_context():
+        try:
+            url = app.config.get('APP_URL', 'https://epp-inventory.onrender.com')
+            r = req.get(f"{url}/health", timeout=10)
+            app.logger.info(f"Keep-alive ping: {r.status_code}")
+        except Exception as e:
+            app.logger.warning(f"Keep-alive ping failed: {e}")
 
 
 def register_routes(app):
@@ -1561,8 +1592,22 @@ def register_routes(app):
                     if k.shopify_variant and k.shopify_variant.lower() in variant_title:
                         matched_kit = k
                         break
-            auto_ship_order(order_number, shopify_order_id, matched_kit.name, qty, ship_to,
-                            order_total=order_total, line_items=all_line_items)
+            ship_result = auto_ship_order(order_number, shopify_order_id, matched_kit.name, qty, ship_to,
+                                          order_total=order_total, line_items=all_line_items)
+            # Save tracking/label info on the order record
+            if ship_result.get('tracking_number'):
+                _save_shipping_info(shopify_order_id, ship_result)
+
+    def _save_shipping_info(shopify_order_id, ship_result):
+        """Persist tracking/label data on the ShopifyOrder record."""
+        order = ShopifyOrder.query.filter_by(shopify_order_id=str(shopify_order_id)).first()
+        if order:
+            order.tracking_number = ship_result.get('tracking_number')
+            order.carrier_code = ship_result.get('carrier')
+            order.label_id = ship_result.get('label_id')
+            order.label_url = ship_result.get('label_url')
+            order.shipped_at = datetime.now(timezone.utc)
+            db.session.commit()
 
     @app.route('/api/ship/<shopify_order_id>', methods=['POST'])
     @login_required
@@ -1613,6 +1658,8 @@ def register_routes(app):
             ship_result = auto_ship_order(order_number, shopify_order_id, matched_kit.name, qty, ship_to,
                                           order_total=order_total, line_items=all_line_items)
             results.append(ship_result)
+            if ship_result.get('tracking_number'):
+                _save_shipping_info(shopify_order_id, ship_result)
         return jsonify({'results': results})
 
     # ── Void ShipStation Label ──────────────────────────────────

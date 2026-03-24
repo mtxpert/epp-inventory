@@ -198,3 +198,8 @@ class ShopifyOrder(db.Model):
     line_items_json = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     processed_at = db.Column(db.DateTime)
+    tracking_number = db.Column(db.String(100))
+    carrier_code = db.Column(db.String(30))
+    label_id = db.Column(db.String(100))
+    label_url = db.Column(db.Text)
+    shipped_at = db.Column(db.DateTime)
