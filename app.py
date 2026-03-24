@@ -1628,7 +1628,23 @@ def register_routes(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 400
 
-    @app.route('/api/shipstation/balance', methods=['GET'])
+
+    @app.route('/api/admin/reset-password', methods=['POST'])
+    @login_required
+    def admin_reset_password():
+        if current_user.role != 'admin':
+            return jsonify({'error': 'Admin only'}), 403
+        data = request.get_json()
+        email = data.get('email', '').lower().strip()
+        new_pw = data.get('new_password', '')
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        user.set_password(new_pw)
+        db.session.commit()
+        return jsonify({'ok': True, 'email': email})
+
+        @app.route('/api/shipstation/balance', methods=['GET'])
     @login_required
     def shipstation_balance():
         """Return current ShipStation account balance."""
