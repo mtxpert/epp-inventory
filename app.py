@@ -1522,7 +1522,6 @@ def register_routes(app):
         # Auto-ship: buy label, email Josh, fulfill Shopify
         if result.get('status') not in ('already_processed',) and result.get('deductions'):
             try:
-                from shipstation import auto_ship_order
                 _auto_ship_from_order(order_data, result)
             except Exception as e:
                 current_app.logger.error(f"Auto-ship error: {e}")
@@ -1530,8 +1529,8 @@ def register_routes(app):
         return jsonify(result), 200
 
     def _auto_ship_from_order(order_data, process_result):
-        """Extract ship_to and kit info from order data, then trigger auto_ship_order."""
-        from shipstation import auto_ship_order
+        """Extract ship_to and kit info from order data, buy all labels, then fulfill Shopify once."""
+        from shipstation import buy_label_and_notify_josh, fulfill_shopify_order, mark_shipped_v1
         from models import Kit
         order_number = str(order_data.get('order_number', ''))
         shopify_order_id = str(order_data.get('id', ''))
@@ -1548,6 +1547,9 @@ def register_routes(app):
         }
         order_total = float(order_data.get('total_price', 0) or 0)
         all_line_items = order_data.get('line_items', [])
+
+        # Phase 1: buy a label per kit, collect tracking numbers
+        label_results = []
         for item in all_line_items:
             product_id = str(item.get('product_id', ''))
             qty = item.get('quantity', 1)
@@ -1561,14 +1563,30 @@ def register_routes(app):
                     if k.shopify_variant and k.shopify_variant.lower() in variant_title:
                         matched_kit = k
                         break
-            auto_ship_order(order_number, shopify_order_id, matched_kit.name, qty, ship_to,
-                            order_total=order_total, line_items=all_line_items)
+            r = buy_label_and_notify_josh(order_number, matched_kit.name, qty, ship_to,
+                                          order_total=order_total, line_items=all_line_items)
+            label_results.append(r)
+            if r.get('error'):
+                current_app.logger.error(f"Label error for {matched_kit.name} on #{order_number}: {r['error']}")
+
+        # Phase 2: fulfill Shopify once with all tracking numbers
+        trackings = [r['tracking_number'] for r in label_results if r.get('tracking_number')]
+        carrier = next((r.get('carrier', '') for r in label_results if r.get('carrier')), '')
+        if trackings:
+            try:
+                fulfill_shopify_order(shopify_order_id, trackings, carrier)
+            except Exception as e:
+                current_app.logger.error(f"Shopify fulfillment error for #{order_number}: {e}")
+            try:
+                mark_shipped_v1(order_number, ', '.join(trackings), carrier)
+            except Exception as e:
+                current_app.logger.error(f"ShipStation markasshipped error for #{order_number}: {e}")
 
     @app.route('/api/ship/<shopify_order_id>', methods=['POST'])
     @login_required
     def manual_ship(shopify_order_id):
-        """Manually trigger label purchase for a Shopify order (for testing)."""
-        from shipstation import auto_ship_order
+        """Manually trigger label purchase for a Shopify order."""
+        from shipstation import buy_label_and_notify_josh, fulfill_shopify_order, mark_shipped_v1
         from models import Kit
         import requests as req
         token = app.config.get('SHOPIFY_TOKEN', '')
@@ -1595,14 +1613,16 @@ def register_routes(app):
         order_number = str(order_data.get('order_number', ''))
         order_total = float(order_data.get('total_price', 0) or 0)
         all_line_items = order_data.get('line_items', [])
-        results = []
+
+        # Phase 1: buy a label per kit
+        label_results = []
         for item in all_line_items:
             product_id = str(item.get('product_id', ''))
             qty = item.get('quantity', 1)
             variant_title = (item.get('variant_title') or '').lower()
             kits = Kit.query.filter_by(shopify_id=product_id).all()
             if not kits:
-                results.append({'item': item.get('title'), 'status': 'no_kit_match'})
+                label_results.append({'item': item.get('title'), 'status': 'no_kit_match'})
                 continue
             matched_kit = kits[0]
             if len(kits) > 1:
@@ -1610,10 +1630,25 @@ def register_routes(app):
                     if k.shopify_variant and k.shopify_variant.lower() in variant_title:
                         matched_kit = k
                         break
-            ship_result = auto_ship_order(order_number, shopify_order_id, matched_kit.name, qty, ship_to,
-                                          order_total=order_total, line_items=all_line_items)
-            results.append(ship_result)
-        return jsonify({'results': results})
+            ship_result = buy_label_and_notify_josh(order_number, matched_kit.name, qty, ship_to,
+                                                    order_total=order_total, line_items=all_line_items)
+            label_results.append(ship_result)
+
+        # Phase 2: fulfill Shopify once with all tracking numbers
+        trackings = [r['tracking_number'] for r in label_results if r.get('tracking_number')]
+        carrier = next((r.get('carrier', '') for r in label_results if r.get('carrier')), '')
+        fulfill_resp = None
+        if trackings:
+            try:
+                fulfill_resp = fulfill_shopify_order(shopify_order_id, trackings, carrier)
+            except Exception as e:
+                fulfill_resp = {'error': str(e)}
+            try:
+                mark_shipped_v1(order_number, ', '.join(trackings), carrier)
+            except Exception as e:
+                current_app.logger.error(f"ShipStation markasshipped error for #{order_number}: {e}")
+
+        return jsonify({'results': label_results, 'shopify_fulfillment': fulfill_resp})
 
     # ── Void ShipStation Label ──────────────────────────────────
 

@@ -193,8 +193,9 @@ def void_label(label_id):
     Void a ShipStation label and get a credit refund.
     Returns API response dict or raises on error.
     """
-    r = requests.delete(
-        f"{SHIPSTATION_BASE}/labels/{label_id}",
+    r = requests.put(
+        f"{SHIPSTATION_BASE}/labels/{label_id}/void",
+        json={},
         headers=_headers(),
         timeout=15
     )
@@ -217,22 +218,29 @@ def _fetch_label_pdf(label_data):
     return None
 
 
-def email_label_to_josh(order_number, kit_name, recipient_name, label_data, line_items=None):
+def email_label_to_josh(order_number, kit_name, recipient_name, label_data, line_items=None, ship_to=None):
     """Email 4×6 label PDF and order details to Josh."""
+    import re
     from app import mail
     tracking = label_data.get("tracking_number", "N/A")
     carrier = (label_data.get("carrier_code") or "").upper()
     service = (label_data.get("service_code") or "").replace("_", " ").title()
 
-    # Build order options block (no prices)
+    # Build items block — only show items relevant to this kit, skip internal addon lines
+    # Addon lines have no SKU and their title is just a price/color option (e.g. "White (+$150.00)")
+    SKIP_PROPS = {"_io_parent_order_group", "_io_field_name"}
     options_lines = []
     for item in (line_items or []):
         title = item.get("title", "")
-        # Strip price suffix like " (+$150.00)" from title
-        import re
+        sku = item.get("sku") or ""
+        props = [p for p in (item.get("properties") or []) if p.get("name") not in SKIP_PROPS]
+
+        # Skip pure addon lines: no SKU, title is just a price modifier, no meaningful props
+        if not sku and re.match(r'^[^a-zA-Z]*\(\+?\$[\d.,]+\)', title.strip()) and not props:
+            continue
+
         clean_title = re.sub(r'\s*\(\+?\$[\d.,]+\)', '', title).strip()
         variant = item.get("variant_title") or ""
-        props = item.get("properties") or []
         line = f"  • {clean_title}"
         if variant:
             line += f" — {variant}"
@@ -243,6 +251,15 @@ def email_label_to_josh(order_number, kit_name, recipient_name, label_data, line
 
     options_block = "\n".join(options_lines) if options_lines else f"  • {kit_name}"
 
+    # Build shipping address block
+    addr_block = ""
+    if ship_to:
+        parts = [ship_to.get("address_line1", "")]
+        if ship_to.get("address_line2"):
+            parts.append(ship_to["address_line2"])
+        parts.append(f"{ship_to.get('city_locality','')}, {ship_to.get('state_province','')} {ship_to.get('postal_code','')}")
+        addr_block = "\n          ".join(p for p in parts if p.strip())
+
     msg = Message(
         subject=f"[SHIP] Order #{order_number} — {kit_name}",
         recipients=[JOSH_EMAIL],
@@ -251,7 +268,8 @@ def email_label_to_josh(order_number, kit_name, recipient_name, label_data, line
             f"Order to ship:\n\n"
             f"Order #:  {order_number}\n"
             f"Ship To:  {recipient_name}\n"
-            f"Service:  {carrier} {service}\n"
+            + (f"          {addr_block}\n" if addr_block else "")
+            + f"Service:  {carrier} {service}\n"
             f"Tracking: {tracking}\n\n"
             f"Items:\n{options_block}\n\n"
             f"Label attached — print at 4×6.\n\n"
@@ -265,8 +283,10 @@ def email_label_to_josh(order_number, kit_name, recipient_name, label_data, line
     return tracking
 
 
-def fulfill_shopify_order(shopify_order_id, tracking_number, carrier_code):
-    """Push tracking to Shopify and trigger customer notification email."""
+def fulfill_shopify_order(shopify_order_id, tracking_numbers, carrier_code):
+    """Push tracking to Shopify and trigger customer notification email.
+    tracking_numbers: single string or list of tracking numbers.
+    """
     token = current_app.config.get("SHOPIFY_TOKEN", "")
     store = current_app.config.get("SHOPIFY_STORE", "edf236-3.myshopify.com")
     if not token:
@@ -274,7 +294,13 @@ def fulfill_shopify_order(shopify_order_id, tracking_number, carrier_code):
     company_map = {"ups": "UPS", "usps": "USPS", "fedex": "FedEx"}
     company = company_map.get((carrier_code or "").lower(), (carrier_code or "").upper())
 
-    # Get fulfillment order ID first
+    # Accept list or single string; Shopify wants comma-separated in "number" field
+    if isinstance(tracking_numbers, list):
+        tracking_str = ", ".join(t for t in tracking_numbers if t)
+    else:
+        tracking_str = tracking_numbers or ""
+
+    # Get fulfillment order IDs
     fo_r = requests.get(
         f"https://{store}/admin/api/2024-01/orders/{shopify_order_id}/fulfillment_orders.json",
         headers={"X-Shopify-Access-Token": token},
@@ -290,7 +316,7 @@ def fulfill_shopify_order(shopify_order_id, tracking_number, carrier_code):
         "fulfillment": {
             "notify_customer": True,
             "tracking_info": {
-                "number": tracking_number,
+                "number": tracking_str,
                 "company": company,
             },
             "line_items_by_fulfillment_order": [
@@ -307,12 +333,11 @@ def fulfill_shopify_order(shopify_order_id, tracking_number, carrier_code):
     return r.json()
 
 
-def auto_ship_order(order_number, shopify_order_id, kit_name, qty, ship_to, order_total=0, line_items=None):
+def buy_label_and_notify_josh(order_number, kit_name, qty, ship_to, order_total=0, line_items=None):
     """
-    Full auto-ship: buy label → email Josh → fulfill Shopify order.
-    order_total: full order value — triggers adult signature if >= $750.
-    line_items: all Shopify line items (for options/color in Josh's email).
-    Returns result dict with tracking_number and status flags.
+    Buy a ShipStation label and email Josh. Does NOT fulfill Shopify.
+    Call fulfill_shopify_order() separately after all labels are bought.
+    Returns result dict with tracking_number, carrier, label_id.
     """
     result = {"order_number": order_number, "kit_name": kit_name}
 
@@ -329,18 +354,36 @@ def auto_ship_order(order_number, shopify_order_id, kit_name, qty, ship_to, orde
         result["error"] = f"Label creation failed: {e}"
         return result
 
-    # 2. Email Josh
+    # 2. Email Josh with full address
     try:
-        email_label_to_josh(order_number, kit_name, ship_to.get("name", ""), label, line_items=line_items)
+        email_label_to_josh(order_number, kit_name, ship_to.get("name", ""), label,
+                            line_items=line_items, ship_to=ship_to)
         result["josh_notified"] = True
     except Exception as e:
         current_app.logger.error(f"Josh email error for #{order_number}: {e}")
         result["josh_notified"] = False
         result["email_error"] = str(e)
 
-    # 3. Fulfill Shopify order
+    result["status"] = "ok"
+    return result
+
+
+def auto_ship_order(order_number, shopify_order_id, kit_name, qty, ship_to, order_total=0, line_items=None):
+    """
+    Full auto-ship for a single-kit order: buy label → email Josh → fulfill Shopify.
+    For multi-kit orders use buy_label_and_notify_josh() per kit, then fulfill_shopify_order() once.
+    """
+    result = buy_label_and_notify_josh(order_number, kit_name, qty, ship_to,
+                                       order_total=order_total, line_items=line_items)
+    if result.get("error"):
+        return result
+
+    tracking = result.get("tracking_number")
+    carrier = result.get("carrier", "")
+
+    # Fulfill Shopify order
     try:
-        fulfill_result = fulfill_shopify_order(shopify_order_id, tracking, label.get("carrier_code", ""))
+        fulfill_result = fulfill_shopify_order(shopify_order_id, tracking, carrier)
         result["shopify_fulfilled"] = "fulfillment" in (fulfill_result or {})
         if not result["shopify_fulfilled"]:
             result["fulfillment_response"] = fulfill_result
@@ -349,13 +392,12 @@ def auto_ship_order(order_number, shopify_order_id, kit_name, qty, ship_to, orde
         result["shopify_fulfilled"] = False
         result["fulfillment_error"] = str(e)
 
-    # 4. Mark ShipStation order as shipped (v1 API) so order list shows "Shipped"
+    # Mark ShipStation order as shipped (v1) so order list shows "Shipped"
     try:
-        v1_result = mark_shipped_v1(order_number, tracking, label.get("carrier_code", ""))
+        v1_result = mark_shipped_v1(order_number, tracking, carrier)
         result["shipstation_marked_shipped"] = bool(v1_result)
     except Exception as e:
         current_app.logger.error(f"ShipStation v1 markasshipped error for #{order_number}: {e}")
         result["shipstation_marked_shipped"] = False
 
-    result["status"] = "ok"
     return result

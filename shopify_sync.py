@@ -137,7 +137,7 @@ def _smtp_send(to_addrs, subject, body, cc=None):
 
 def send_tial_bov_email(order_number, bov_label):
     """Email FullRace when a Tial BOV is ordered."""
-    subject = f"New Order - Tial {bov_label}"
+    subject = f"New Order - {bov_label}"
     body = (
         f"Hey guys need another Tial BoV {bov_label} with 10psi spring please. "
         f"Josh will pick it up once you have it.\n\n"
