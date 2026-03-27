@@ -286,6 +286,9 @@ def email_label_to_josh(order_number, kit_name, recipient_name, label_data, line
 def fulfill_shopify_order(shopify_order_id, tracking_numbers, carrier_code):
     """Push tracking to Shopify and trigger customer notification email.
     tracking_numbers: single string or list of tracking numbers.
+    When multiple tracking numbers are given and Shopify has matching open
+    fulfillment orders, one fulfillment is created per tracking number so each
+    appears as a separate entry in the admin and customer email.
     """
     token = current_app.config.get("SHOPIFY_TOKEN", "")
     store = current_app.config.get("SHOPIFY_STORE", "edf236-3.myshopify.com")
@@ -294,11 +297,11 @@ def fulfill_shopify_order(shopify_order_id, tracking_numbers, carrier_code):
     company_map = {"ups": "UPS", "usps": "USPS", "fedex": "FedEx"}
     company = company_map.get((carrier_code or "").lower(), (carrier_code or "").upper())
 
-    # Accept list or single string; Shopify wants comma-separated in "number" field
+    # Normalize to list
     if isinstance(tracking_numbers, list):
-        tracking_str = ", ".join(t for t in tracking_numbers if t)
+        tracking_list = [t for t in tracking_numbers if t]
     else:
-        tracking_str = tracking_numbers or ""
+        tracking_list = [t.strip() for t in (tracking_numbers or "").split(",") if t.strip()]
 
     # Get fulfillment order IDs
     fo_r = requests.get(
@@ -312,25 +315,39 @@ def fulfill_shopify_order(shopify_order_id, tracking_numbers, carrier_code):
     if not open_fos:
         return {"error": "no open fulfillment orders"}
 
-    payload = {
-        "fulfillment": {
-            "notify_customer": True,
-            "tracking_info": {
-                "number": tracking_str,
-                "company": company,
-            },
-            "line_items_by_fulfillment_order": [
-                {"fulfillment_order_id": fo_id} for fo_id in open_fos
-            ],
+    def _post_fulfillment(fo_ids, tracking, notify):
+        payload = {
+            "fulfillment": {
+                "notify_customer": notify,
+                "tracking_info": {"number": tracking, "company": company},
+                "line_items_by_fulfillment_order": [
+                    {"fulfillment_order_id": fid} for fid in fo_ids
+                ],
+            }
         }
-    }
-    r = requests.post(
-        f"https://{store}/admin/api/2024-01/fulfillments.json",
-        json=payload,
-        headers={"X-Shopify-Access-Token": token, "Content-Type": "application/json"},
-        timeout=15
-    )
-    return r.json()
+        r = requests.post(
+            f"https://{store}/admin/api/2024-01/fulfillments.json",
+            json=payload,
+            headers={"X-Shopify-Access-Token": token, "Content-Type": "application/json"},
+            timeout=15
+        )
+        return r.json()
+
+    # If multiple trackings and enough FOs, create one fulfillment per tracking.
+    # FOs are in the same order as line_items, which matches the order we built
+    # tracking_list in _auto_ship_from_order. Last fulfillment notifies the customer.
+    if len(tracking_list) > 1 and len(open_fos) >= len(tracking_list):
+        last = len(tracking_list) - 1
+        result = None
+        for i, tracking in enumerate(tracking_list):
+            # First N-1 trackings get one FO each; last gets any remainder
+            fo_ids = [open_fos[i]] if i < last else open_fos[i:]
+            result = _post_fulfillment(fo_ids, tracking, notify=(i == last))
+        return result
+
+    # Single tracking (or FO count doesn't match) — one fulfillment for everything
+    tracking_str = tracking_list[0] if len(tracking_list) == 1 else ", ".join(tracking_list)
+    return _post_fulfillment(open_fos, tracking_str, notify=True)
 
 
 def buy_label_and_notify_josh(order_number, kit_name, qty, ship_to, order_total=0, line_items=None):
