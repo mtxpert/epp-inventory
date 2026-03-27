@@ -17,7 +17,7 @@ TIAL_VARIANT_IDS = {
     '43898647183515': 'Tial Q - Silver',
 }
 
-FULLRACE_EMAIL = 'sales@fullrace.com'
+FULLRACE_EMAIL = 'sales@full-race.com'
 JOSH_EMAIL = 'Durmajdesigns@gmail.com'
 
 
