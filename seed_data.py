@@ -109,7 +109,7 @@ KITS = {
         "components": {"HP-NMD": 1, "SH-0-63": 1, "SH-0-76": 1, "CLAMP-250": 2, "CLAMP-300": 2}
     },
     "nmd_upgrade": {
-        "name": "NMD to Hot Pipe Upgrade Kit", "shopify_id": "7786267312283", "retail_price": 500,
+        "name": "NMD to Hot Pipe Upgrade Kit", "shopify_id": "7786267312283", "retail_price": 525,
         "components": {"HP-SHRT": 1, "HP-LNG": 1, "SH-0-51": 1, "SR-0-38-51": 1, "SS-0-51": 1, "XH-CP024": 1,
                        "CLAMP-150": 2, "CLAMP-200": 6}
     },
