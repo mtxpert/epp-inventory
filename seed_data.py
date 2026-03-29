@@ -95,17 +95,17 @@ COMPONENTS = {
 
 KITS = {
     "hot_pipes_sho": {
-        "name": "SHO/Flex/MKT Hot Pipes", "shopify_id": "7786267443355", "retail_price": 625,
+        "name": "SHO/Flex/MKT Hot Pipes", "shopify_id": "7786267443355", "retail_price": 675,
         "components": {"HP-NMD": 1, "HP-SHRT": 1, "HP-LNG": 1, "SH-0-51": 1, "SH-0-63": 1, "SH-0-76": 1,
                        "SR-0-38-51": 1, "SS-0-51": 1, "XH-CP024": 1, "CLAMP-150": 2, "CLAMP-200": 6, "CLAMP-250": 2, "CLAMP-300": 2}
     },
     "hot_pipes_explorer": {
-        "name": "Explorer Sport Hot Pipes", "shopify_id": "7786267082907", "retail_price": 625,
+        "name": "Explorer Sport Hot Pipes", "shopify_id": "7786267082907", "retail_price": 675,
         "components": {"HP-NMD": 1, "HP-SHRT": 1, "HP-LNG": 1, "SH-0-51": 1, "SH-0-76": 1, "SR-0-38-51": 1,
                        "SS-0-51": 1, "EXP-45-63": 1, "CLAMP-150": 1, "CLAMP-200": 5, "CLAMP-250": 2, "CLAMP-300": 2}
     },
     "nmd": {
-        "name": "Noisemaker Delete Pipe", "shopify_id": "7786267050139", "retail_price": 235,
+        "name": "Noisemaker Delete Pipe", "shopify_id": "7786267050139", "retail_price": 249,
         "components": {"HP-NMD": 1, "SH-0-63": 1, "SH-0-76": 1, "CLAMP-250": 2, "CLAMP-300": 2}
     },
     "nmd_upgrade": {
@@ -114,7 +114,7 @@ KITS = {
                        "CLAMP-150": 2, "CLAMP-200": 6}
     },
     "explorer_nmd": {
-        "name": "Explorer Sport NMD", "shopify_id": "8261715722395", "retail_price": 235,
+        "name": "Explorer Sport NMD", "shopify_id": "8261715722395", "retail_price": 249,
         "components": {"HP-NMD": 1, "SH-0-76": 1, "EXP-45-63": 1, "CLAMP-250": 2, "CLAMP-300": 2}
     },
     "intake_stock_hose": {
