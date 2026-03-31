@@ -28,6 +28,9 @@ PKG_USPS_PADDED   = "flat_rate_padded_envelope"
 
 JOSH_EMAIL = "Durmajdesigns@gmail.com"
 MIKE_EMAIL = "info@ecopowerparts.com"
+
+# Kits that ship from Mike (GA warehouse) — email goes to Mike only
+MIKE_SHIPS = ("raptor",)
 SHOPIFY_LOCATION_ID = 67632070811
 
 
@@ -219,7 +222,7 @@ def _fetch_label_pdf(label_data):
 
 
 def email_label_to_josh(order_number, kit_name, recipient_name, label_data, line_items=None, ship_to=None):
-    """Email 4×6 label PDF and order details to Josh."""
+    """Email 4×6 label PDF and order details to Josh (or Mike for Raptor kits)."""
     import re
     from app import mail
     tracking = label_data.get("tracking_number", "N/A")
@@ -260,10 +263,19 @@ def email_label_to_josh(order_number, kit_name, recipient_name, label_data, line
         parts.append(f"{ship_to.get('city_locality','')}, {ship_to.get('state_province','')} {ship_to.get('postal_code','')}")
         addr_block = "\n          ".join(p for p in parts if p.strip())
 
+    # Raptor kits ship from Mike's GA warehouse — email Mike only
+    kit_lower = kit_name.lower()
+    if any(k in kit_lower for k in MIKE_SHIPS):
+        to_emails = [MIKE_EMAIL]
+        cc_emails = []
+    else:
+        to_emails = [JOSH_EMAIL]
+        cc_emails = [MIKE_EMAIL]
+
     msg = Message(
         subject=f"[SHIP] Order #{order_number} — {kit_name}",
-        recipients=[JOSH_EMAIL],
-        cc=[MIKE_EMAIL],
+        recipients=to_emails,
+        cc=cc_emails,
         body=(
             f"Order to ship:\n\n"
             f"Order #:  {order_number}\n"
@@ -286,9 +298,8 @@ def email_label_to_josh(order_number, kit_name, recipient_name, label_data, line
 def fulfill_shopify_order(shopify_order_id, tracking_numbers, carrier_code):
     """Push tracking to Shopify and trigger customer notification email.
     tracking_numbers: single string or list of tracking numbers.
-    When multiple tracking numbers are given and Shopify has matching open
-    fulfillment orders, one fulfillment is created per tracking number so each
-    appears as a separate entry in the admin and customer email.
+    For multiple tracking numbers, creates the fulfillment with the first tracking
+    then updates via GraphQL to attach all numbers as separate lines.
     """
     token = current_app.config.get("SHOPIFY_TOKEN", "")
     store = current_app.config.get("SHOPIFY_STORE", "edf236-3.myshopify.com")
@@ -302,8 +313,10 @@ def fulfill_shopify_order(shopify_order_id, tracking_numbers, carrier_code):
         tracking_list = [t for t in tracking_numbers if t]
     else:
         tracking_list = [t.strip() for t in (tracking_numbers or "").split(",") if t.strip()]
+    if not tracking_list:
+        return {"error": "no tracking numbers provided"}
 
-    # Get fulfillment order IDs
+    # Get open fulfillment order IDs
     fo_r = requests.get(
         f"https://{store}/admin/api/2024-01/orders/{shopify_order_id}/fulfillment_orders.json",
         headers={"X-Shopify-Access-Token": token},
@@ -315,39 +328,68 @@ def fulfill_shopify_order(shopify_order_id, tracking_numbers, carrier_code):
     if not open_fos:
         return {"error": "no open fulfillment orders"}
 
-    def _post_fulfillment(fo_ids, tracking, notify):
-        payload = {
-            "fulfillment": {
-                "notify_customer": notify,
-                "tracking_info": {"number": tracking, "company": company},
-                "line_items_by_fulfillment_order": [
-                    {"fulfillment_order_id": fid} for fid in fo_ids
-                ],
-            }
+    # Create fulfillment with first tracking number (REST API)
+    payload = {
+        "fulfillment": {
+            "notify_customer": True,
+            "tracking_info": {"number": tracking_list[0], "company": company},
+            "line_items_by_fulfillment_order": [
+                {"fulfillment_order_id": fid} for fid in open_fos
+            ],
         }
-        r = requests.post(
-            f"https://{store}/admin/api/2024-01/fulfillments.json",
-            json=payload,
-            headers={"X-Shopify-Access-Token": token, "Content-Type": "application/json"},
-            timeout=15
-        )
-        return r.json()
+    }
+    r = requests.post(
+        f"https://{store}/admin/api/2024-01/fulfillments.json",
+        json=payload,
+        headers={"X-Shopify-Access-Token": token, "Content-Type": "application/json"},
+        timeout=15
+    )
+    result = r.json()
 
-    # If multiple trackings and enough FOs, create one fulfillment per tracking.
-    # FOs are in the same order as line_items, which matches the order we built
-    # tracking_list in _auto_ship_from_order. Last fulfillment notifies the customer.
-    if len(tracking_list) > 1 and len(open_fos) >= len(tracking_list):
-        last = len(tracking_list) - 1
-        result = None
-        for i, tracking in enumerate(tracking_list):
-            # First N-1 trackings get one FO each; last gets any remainder
-            fo_ids = [open_fos[i]] if i < last else open_fos[i:]
-            result = _post_fulfillment(fo_ids, tracking, notify=(i == last))
-        return result
+    # If multiple tracking numbers, update via GraphQL to attach all as separate lines
+    if len(tracking_list) > 1:
+        fulfillment_id = (result.get("fulfillment") or {}).get("id")
+        if fulfillment_id:
+            ups_base = "https://www.ups.com/WebTracking?trackNums="
+            usps_base = "https://tools.usps.com/go/TrackConfirmAction?tLabels="
+            url_base = ups_base if company == "UPS" else usps_base
+            gql_mutation = """
+mutation FulfillmentTrackingInfoUpdate(
+  $fulfillmentId: ID!
+  $trackingInfoInput: FulfillmentTrackingInput!
+) {
+  fulfillmentTrackingInfoUpdate(
+    fulfillmentId: $fulfillmentId
+    trackingInfoInput: $trackingInfoInput
+    notifyCustomer: false
+  ) {
+    fulfillment { id status }
+    userErrors { field message }
+  }
+}
+"""
+            variables = {
+                "fulfillmentId": f"gid://shopify/Fulfillment/{fulfillment_id}",
+                "trackingInfoInput": {
+                    "company": company,
+                    "numbers": tracking_list,
+                    "urls": [f"{url_base}{t}" for t in tracking_list],
+                }
+            }
+            gql_r = requests.post(
+                f"https://{store}/admin/api/2024-01/graphql.json",
+                json={"query": gql_mutation, "variables": variables},
+                headers={"X-Shopify-Access-Token": token, "Content-Type": "application/json"},
+                timeout=15
+            )
+            gql_data = gql_r.json()
+            errors = (gql_data.get("data", {})
+                              .get("fulfillmentTrackingInfoUpdate", {})
+                              .get("userErrors", []))
+            if errors:
+                current_app.logger.error(f"GraphQL tracking update errors: {errors}")
 
-    # Single tracking (or FO count doesn't match) — one fulfillment for everything
-    tracking_str = tracking_list[0] if len(tracking_list) == 1 else ", ".join(tracking_list)
-    return _post_fulfillment(open_fos, tracking_str, notify=True)
+    return result
 
 
 def buy_label_and_notify_josh(order_number, kit_name, qty, ship_to, order_total=0, line_items=None):
@@ -418,3 +460,4 @@ def auto_ship_order(order_number, shopify_order_id, kit_name, qty, ship_to, orde
         result["shipstation_marked_shipped"] = False
 
     return result
+
