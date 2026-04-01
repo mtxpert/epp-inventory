@@ -157,6 +157,23 @@ def create_label(order_number, kit_name, qty, ship_to, order_total=0):
     if float(order_total or 0) >= 750:
         shipment["confirmation"] = "adult_signature"
 
+    # APO/FPO/DPO addresses require customs declaration even for domestic USPS
+    apo_states = {"AP", "AE", "AA"}
+    if ship_to.get("state_province", "").upper() in apo_states:
+        shipment["customs"] = {
+            "contents": "merchandise",
+            "non_delivery": "return_to_sender",
+            "customs_items": [
+                {
+                    "description": kit_name[:50],
+                    "quantity": qty,
+                    "value": {"amount": round(float(order_total or 0), 2), "currency": "USD"},
+                    "country_of_origin": "US",
+                    "harmonized_tariff_code": "8544.42"
+                }
+            ]
+        }
+
     payload = {
         "label_format": "pdf",
         "label_layout": "4x6",
