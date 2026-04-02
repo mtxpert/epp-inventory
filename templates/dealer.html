@@ -54,7 +54,7 @@
 {% for row in all_inv %}{% if cd3_inv.update({row.kit_slug: row}) %}{% endif %}{% endfor %}
 <div class="dealer-grid" style="margin-bottom:32px;">
   {% for slug, info in dealer_kits.items() %}
-  {% set row = all_inv | selectattr('kit_slug','equalto',slug) | list | first %}
+  {% set row = all_inv | selectattr('kit_slug','equalto',slug) | selectattr('dealer_id','equalto',dealers[0].id) | list | first %}
   {% set count = row.sets_on_hand if row else 0 %}
   <div class="inv-card">
     <div class="inv-count {% if count == 0 %}empty{% elif count <= 2 %}low{% endif %}">{{ count }}</div>
