@@ -233,19 +233,42 @@ def create_app():
             if pcb and pcb.qty == 0:
                 pcb.qty = 70
         db.session.commit()
-        # Add Raptor kits if missing
-        from seed_data import KITS as SEED_KITS
-        for rslug in ['raptor_sw_harness', 'raptor_console_harness']:
-            if not Kit.query.filter_by(slug=rslug).first():
-                rk_info = SEED_KITS[rslug]
-                rk = Kit(slug=rslug, name=rk_info['name'], retail_price=0)
+        # Add finished-assembly components for raptor harnesses (tracks assembled units on hand)
+        for pn, name, init_qty in [
+            ('RAPT-ASSY-SW',  'Raptor SW Harness — Assembled',      0),
+            ('RAPT-ASSY-CON', 'Raptor Console Harness — Assembled', 0),
+        ]:
+            if not Component.query.filter_by(part_number=pn).first():
+                db.session.add(Component(part_number=pn, name=name, category='raptor',
+                                         qty=init_qty, reorder_threshold=5))
+        db.session.commit()
+        # Set real on-hand quantities for assembled harnesses (only updates once if still at 0)
+        sw_assy = Component.query.filter_by(part_number='RAPT-ASSY-SW').first()
+        con_assy = Component.query.filter_by(part_number='RAPT-ASSY-CON').first()
+        if sw_assy and sw_assy.qty == 0:
+            sw_assy.qty = -1   # sold one, waiting on restock (20 on order)
+        if con_assy and con_assy.qty == 0:
+            con_assy.qty = 3
+        db.session.commit()
+        # Add Raptor kits if missing — BOMs now reference assembled units
+        for rslug, rname, assy_pn in [
+            ('raptor_sw_harness',      'Raptor Steering Wheel Harness',   'RAPT-ASSY-SW'),
+            ('raptor_console_harness', 'Raptor Console Shifter Harness',   'RAPT-ASSY-CON'),
+        ]:
+            rk = Kit.query.filter_by(slug=rslug).first()
+            if not rk:
+                rk = Kit(slug=rslug, name=rname, retail_price=360 if 'sw' in rslug else 0)
                 db.session.add(rk)
                 db.session.flush()
-                for pn, qty in rk_info['components'].items():
-                    comp = Component.query.filter_by(part_number=pn).first()
-                    if comp:
-                        db.session.add(KitComponent(kit_id=rk.id, component_id=comp.id, quantity=qty))
-                db.session.commit()
+            # Ensure BOM is the assembled harness component (replace raw-parts BOM if still there)
+            assy_comp = Component.query.filter_by(part_number=assy_pn).first()
+            if assy_comp:
+                already = KitComponent.query.filter_by(kit_id=rk.id, component_id=assy_comp.id).first()
+                if not already:
+                    # Clear old raw-component BOM, replace with single assembled-unit entry
+                    KitComponent.query.filter_by(kit_id=rk.id).delete()
+                    db.session.add(KitComponent(kit_id=rk.id, component_id=assy_comp.id, quantity=1))
+        db.session.commit()
         # Add Mouser supplier if missing
         if not Supplier.query.filter_by(name='Mouser Electronics').first():
             mouser = Supplier(name='Mouser Electronics', email='', contact_name='',
@@ -1941,6 +1964,28 @@ def register_routes(app):
                                orders=orders, dealer_kits=DEALER_KITS, pc_options=PC_OPTIONS,
                                balance_owed=balance_owed)
 
+    @app.route('/dealer/view_as/<int:dealer_id>')
+    @login_required
+    def dealer_view_as(dealer_id):
+        """Admin-only: render the dealer portal exactly as that dealer sees it."""
+        if current_user.role != 'admin':
+            flash('Access denied', 'error')
+            return redirect(url_for('dashboard'))
+        dealer = User.query.get_or_404(dealer_id)
+        inv = _get_or_create_dealer_inventory(dealer_id)
+        orders = DealerOrder.query.filter_by(dealer_id=dealer_id)\
+                                  .order_by(DealerOrder.created_at.desc()).limit(50).all()
+        balance_owed = sum(
+            (o.total_owed or 0) for o in orders
+            if o.order_type == 'dropship' and o.status in ('shipped', 'pending')
+               and o.total_owed and o.total_owed > 0
+        )
+        return render_template('dealer.html',
+                               is_admin=False, inv=inv,
+                               orders=orders, dealer_kits=DEALER_KITS, pc_options=PC_OPTIONS,
+                               balance_owed=balance_owed,
+                               viewing_as=dealer)
+
     @app.route('/api/dealer/dropship', methods=['POST'])
     @login_required
     def dealer_dropship():
@@ -2182,6 +2227,77 @@ def register_routes(app):
         row.sets_on_hand = max(0, qty)
         db.session.commit()
         return jsonify({'ok': True, 'sets_on_hand': row.sets_on_hand})
+
+    @app.route('/api/dealer/order/<int:order_id>/ship', methods=['POST'])
+    @login_required
+    def dealer_order_ship(order_id):
+        """Admin: mark a dealer drop-ship as shipped, calculate total, send PayPal invoice + email to dealer."""
+        if current_user.role != 'admin':
+            return jsonify({'error': 'Admin only'}), 403
+        import json as _json
+        data = request.get_json()
+        order = DealerOrder.query.get_or_404(order_id)
+        if order.order_type != 'dropship':
+            return jsonify({'error': 'Only drop-ship orders can be marked shipped this way'}), 400
+
+        tracking = data.get('tracking', '').strip()
+        if not tracking:
+            return jsonify({'error': 'Tracking number required'}), 400
+        shipping_cost = float(data.get('shipping_cost', 0) or 0)
+
+        order.tracking_number = tracking
+        order.shipping_cost = shipping_cost
+        order.status = 'shipped'
+        order.shipped_at = datetime.now(timezone.utc)
+
+        # Total = powder coat + shipping + $15 markup (markup not disclosed to dealer)
+        pc_cost = order.pc_cost or 0
+        shipping_charged = round(shipping_cost + SHIPPING_MARKUP, 2)
+        total_owed = round(pc_cost + shipping_charged, 2)
+        order.total_owed = total_owed
+        db.session.commit()
+
+        # Build PayPal invoice
+        paypal_items = []
+        if pc_cost > 0:
+            items = _json.loads(order.items_json or '[]')
+            for item in items:
+                if item.get('pc_cost', 0) > 0:
+                    paypal_items.append({'name': f"{item['kit_name']} — {item.get('pc_label','Powder Coat')}",
+                                         'amount': float(item['pc_cost'])})
+        paypal_items.append({'name': 'Shipping', 'amount': shipping_charged})
+
+        paypal_url = None
+        try:
+            paypal_url = _paypal_invoice(order.id, order.ship_to_name or 'Customer', paypal_items)
+        except Exception as e:
+            current_app.logger.error(f'PayPal invoice error for order {order_id}: {e}')
+
+        # Email dealer
+        try:
+            items_list = _json.loads(order.items_json or '[]')
+            items_desc = ', '.join(i['kit_name'] for i in items_list)
+            body_lines = [
+                f"Your drop-ship order has been fulfilled and is on its way!",
+                f"",
+                f"Customer: {order.ship_to_name}",
+                f"Ship-to: {order.ship_to_address1}, {order.ship_to_city}, {order.ship_to_state} {order.ship_to_zip}",
+                f"Items: {items_desc}",
+                f"Tracking: {tracking}",
+                f"",
+                f"Amount owed: ${total_owed:.2f}",
+            ]
+            if paypal_url:
+                body_lines += [f"", f"Pay here: {paypal_url}"]
+            mail.send_message(
+                subject=f"Order Shipped — {order.ship_to_name} ({items_desc})",
+                recipients=[DEALER_EMAIL],
+                body='\n'.join(body_lines)
+            )
+        except Exception as e:
+            current_app.logger.error(f'Dealer ship email error for order {order_id}: {e}')
+
+        return jsonify({'ok': True, 'total_owed': total_owed, 'paypal_url': paypal_url})
 
     @app.route('/api/dealer/order/<int:order_id>/patch', methods=['POST'])
     @login_required

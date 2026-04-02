@@ -45,6 +45,13 @@
   {% if is_admin %}Manage dealer inventory, orders, and restocks.{% else %}Welcome, Troy. Place drop-ship orders or request a restock below.{% endif %}
 </p>
 
+{% if viewing_as is defined and viewing_as %}
+<div style="background:#1c1917;border:2px solid #f59e0b;border-radius:8px;padding:12px 18px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;">
+  <span style="color:#fde68a;font-size:13px;font-weight:600;">👁 Viewing as: {{ viewing_as.name }} ({{ viewing_as.email }})</span>
+  <a href="/dealer" style="color:#94a3b8;font-size:12px;text-decoration:underline;">← Back to Admin View</a>
+</div>
+{% endif %}
+
 {% if is_admin %}
 <!-- ═══════════ ADMIN VIEW ═══════════ -->
 
