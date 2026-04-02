@@ -130,6 +130,16 @@ def create_app():
         if 'must_change_password' not in user_cols:
             db.session.execute(db.text("ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT FALSE"))
             db.session.commit()
+        # Add notes column to kits if missing
+        if 'notes' not in kit_cols:
+            db.session.execute(db.text("ALTER TABLE kits ADD COLUMN notes VARCHAR(200) DEFAULT ''"))
+            db.session.commit()
+        # Mark raptor kits as delayed
+        for rslug in ['raptor_sw_harness', 'raptor_console_harness']:
+            rkit = Kit.query.filter_by(slug=rslug).first()
+            if rkit and rkit.notes != 'Delayed — waiting for new harnesses':
+                rkit.notes = 'Delayed — waiting for new harnesses'
+        db.session.commit()
         from seed_data import seed_database
         seed_database()
         # Update kit prices from seed data

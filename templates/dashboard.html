@@ -165,7 +165,7 @@
             <tbody>
                 {% for kit in kits %}
                 <tr>
-                    <td><strong>{{ kit.name }}</strong></td>
+                    <td><strong>{{ kit.name }}</strong>{% if kit.notes %}<br><span style="font-size:11px;color:#f87171;">⏳ {{ kit.notes }}</span>{% endif %}</td>
                     <td style="color: #94a3b8;">{% if kit.retail_price %}${{ "{:,.0f}".format(kit.retail_price) }}{% else %}-{% endif %}</td>
                     <td style="font-size: 12px;">
                         {% for kc in kit.components %}
