@@ -193,6 +193,13 @@
     <div>
       <div class="section-title">Ship To</div>
       <div class="form-group">
+        <label style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Paste Full Address</span>
+          <span style="font-size:11px;color:#4b5563;font-weight:normal;">Paste & auto-fill below</span>
+        </label>
+        <textarea id="ds-paste" class="form-input" rows="4" placeholder="Paste customer address here:&#10;John Smith&#10;123 Main St&#10;Springfield, IL 62701&#10;john@email.com&#10;5551234567" oninput="parseAddress(this.value)"></textarea>
+      </div>
+      <div class="form-group">
         <label>Customer Name *</label>
         <input type="text" id="ds-name" class="form-input" placeholder="Full name">
       </div>
@@ -379,6 +386,50 @@ document.getElementById('shipModal').addEventListener('click', function(e){
 
 {% else %}
 // Dealer JS
+function parseAddress(raw) {
+  // Parse pasted address block into individual fields
+  // Handles Troy's typical format:
+  //   Name
+  //   Street
+  //   City, State ZIP
+  //   email (optional)
+  //   phone (optional)
+  const lines = raw.trim().split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length < 3) return;
+
+  const emailRe = /\S+@\S+\.\S+/;
+  const phoneRe = /[\d\-\(\)\+\s]{7,}/;
+  const cityStateZipRe = /^(.+),\s*([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$/;
+
+  let name = '', addr = '', city = '', state = '', zip = '', email = '', phone = '';
+
+  const dataLines = lines.filter(l => !emailRe.test(l) && !phoneRe.test(l));
+  const emailLine = lines.find(l => emailRe.test(l)) || '';
+  const phoneLine = lines.find(l => phoneRe.test(l) && !emailRe.test(l)) || '';
+
+  if (emailLine) email = emailLine.match(emailRe)[0];
+  if (phoneLine) phone = phoneLine.replace(/[^\d\-\(\)\+\s]/g, '').trim();
+
+  // First data line = name
+  if (dataLines[0]) name = dataLines[0];
+  // Second data line = street address
+  if (dataLines[1]) addr = dataLines[1];
+  // Third data line = City, ST ZIP
+  if (dataLines[2]) {
+    const m = dataLines[2].match(cityStateZipRe);
+    if (m) { city = m[1].trim(); state = m[2].toUpperCase(); zip = m[3]; }
+    else { city = dataLines[2]; }
+  }
+
+  if (name) document.getElementById('ds-name').value = name;
+  if (addr) document.getElementById('ds-addr').value = addr;
+  if (city) document.getElementById('ds-city').value = city;
+  if (state) document.getElementById('ds-state').value = state;
+  if (zip) document.getElementById('ds-zip').value = zip;
+  if (email) document.getElementById('ds-email').value = email;
+  if (phone) document.getElementById('ds-phone').value = phone;
+}
+
 function switchTab(name) {
   ['dropship','restock','history'].forEach(t=>{
     document.getElementById('tab-'+t).classList.toggle('active', t===name);
