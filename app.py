@@ -2165,6 +2165,66 @@ def register_routes(app):
         db.session.commit()
         return jsonify({'ok': True, 'sets_on_hand': row.sets_on_hand})
 
+    @app.route('/api/dealer/order/<int:order_id>/patch', methods=['POST'])
+    @login_required
+    def dealer_order_patch(order_id):
+        """Admin: manually correct a dealer order's tracking, cost, and status."""
+        if current_user.role != 'admin':
+            return jsonify({'error': 'Admin only'}), 403
+        data = request.get_json()
+        order = DealerOrder.query.get_or_404(order_id)
+        if 'tracking' in data:
+            order.tracking_number = data['tracking']
+        if 'shipping_cost' in data:
+            order.shipping_cost = float(data['shipping_cost'])
+        if 'pc_cost' in data:
+            order.pc_cost = float(data['pc_cost'])
+        if 'total_owed' in data:
+            order.total_owed = float(data['total_owed'])
+        if 'status' in data:
+            order.status = data['status']
+        if 'po_ref' in data:
+            order.po_ref = data['po_ref']
+        db.session.commit()
+        return jsonify({'ok': True})
+
+    @app.route('/api/dealer/log-historical', methods=['POST'])
+    @login_required
+    def dealer_log_historical():
+        """Admin: log a historical dealer order without buying a label."""
+        if current_user.role != 'admin':
+            return jsonify({'error': 'Admin only'}), 403
+        import json as _json
+        data = request.get_json()
+        dealer_id = int(data.get('dealer_id', 3))
+        enriched = data.get('items', [])
+        ship = data.get('ship_to', {})
+        order = DealerOrder(
+            dealer_id=dealer_id,
+            order_type='dropship',
+            status=data.get('status', 'shipped'),
+            po_ref=data.get('po_ref', ''),
+            ship_to_name=ship.get('name', ''),
+            ship_to_address1=ship.get('address1', ''),
+            ship_to_city=ship.get('city', ''),
+            ship_to_state=ship.get('state', ''),
+            ship_to_zip=ship.get('zip', ''),
+            ship_to_email=ship.get('email', ''),
+            ship_to_phone=ship.get('phone', ''),
+            items_json=_json.dumps(enriched),
+            pc_cost=float(data.get('pc_cost', 0)),
+            shipping_cost=float(data.get('shipping_cost', 0)),
+            shipping_markup=SHIPPING_MARKUP,
+            total_owed=float(data.get('total_owed', 0)),
+            tracking_number=data.get('tracking', ''),
+            notes=data.get('notes', ''),
+        )
+        if order.status == 'shipped':
+            order.shipped_at = datetime.now(timezone.utc)
+        db.session.add(order)
+        db.session.commit()
+        return jsonify({'ok': True, 'order_id': order.id})
+
     # ── Health Check ─────────────────────────────────────────────
 
     @app.route('/health')
