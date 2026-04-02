@@ -208,8 +208,8 @@
         <div class="pc-select" id="pc-{{ slug }}">
           <label style="font-size:12px;color:#94a3b8;">Powder Coat</label>
           <select class="form-input" id="pcsel-{{ slug }}" onchange="updateTotal()">
-            {% for key, (label, cost) in pc_options.items() %}
-            <option value="{{ key }}" data-cost="{{ cost }}">{{ label }}{% if cost %} (+${{ cost }}){% endif %}</option>
+            {% for key, pc_val in pc_options.items() %}
+            <option value="{{ key }}" data-cost="{{ pc_val[1] }}">{{ pc_val[0] }}{% if pc_val[1] %} (+${{ pc_val[1] }}){% endif %}</option>
             {% endfor %}
           </select>
         </div>
