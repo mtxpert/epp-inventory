@@ -2107,7 +2107,6 @@ def register_routes(app):
         # Build PayPal invoice items (no mention of $15 markup — bundled into shipping)
         paypal_items = []
         if pc_total > 0:
-            # List each PC item
             for item in enriched:
                 if item['pc_cost'] > 0:
                     paypal_items.append({'name': f"{item['kit_name']} — {item['pc_label']} Powder Coat",
@@ -2120,6 +2119,37 @@ def register_routes(app):
             paypal_url = _paypal_invoice(order.id, ship.get('name', ''), paypal_items)
         except Exception as e:
             current_app.logger.error(f'PayPal invoice error: {e}')
+
+        # Always email Troy: order confirmation + tracking + cost + PayPal link
+        try:
+            items_desc = ', '.join(i['kit_name'] for i in enriched)
+            email_lines = [
+                f"Drop-ship order submitted successfully.",
+                f"",
+                f"Customer: {ship.get('name','')}",
+                f"Address: {ship.get('address1','')}, {ship.get('city','')}, {ship.get('state','')} {ship.get('zip','')}",
+                f"Items: {items_desc}",
+                f"",
+            ]
+            if tracking_str:
+                email_lines += [f"Tracking: {tracking_str}", f""]
+            else:
+                email_lines += [f"Label is being prepared — tracking will be sent separately.", f""]
+            email_lines += [
+                f"Amount due: ${total_charged:.2f}",
+                f"  {'Powder coat: $' + str(pc_total) + chr(10) + '  ' if pc_total else ''}Shipping: ${shipping_charged:.2f}",
+            ]
+            if paypal_url:
+                email_lines += [f"", f"Pay here: {paypal_url}"]
+            else:
+                email_lines += [f"", f"A PayPal invoice will be sent to your email shortly."]
+            mail.send_message(
+                subject=f"Drop-Ship Confirmed — {ship.get('name','')} ({items_desc})",
+                recipients=[DEALER_EMAIL],
+                body='\n'.join(email_lines)
+            )
+        except Exception as e:
+            current_app.logger.error(f'Dealer order confirmation email error: {e}')
 
         resp = {
             'ok': True,
