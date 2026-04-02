@@ -138,22 +138,48 @@
 {% else %}
 <!-- ═══════════ DEALER VIEW ═══════════ -->
 
-<!-- Inventory Summary -->
-<div class="section-title">Your Inventory On Hand</div>
-<div class="dealer-grid">
-  {% for slug, info in dealer_kits.items() %}
-  {% set row = inv[slug] %}
-  <div class="inv-card">
-    <div class="inv-count {% if row.sets_on_hand == 0 %}empty{% elif row.sets_on_hand <= 2 %}low{% endif %}">{{ row.sets_on_hand }}</div>
-    <div class="inv-label">{{ info.name }}</div>
-    <div class="inv-sub">sets on hand · retail ${{ info.retail | int }}</div>
+<!-- Order Confirmation Modal -->
+<div id="orderResultModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:32px;width:480px;max-width:92vw;">
+    <div style="text-align:center;margin-bottom:20px;">
+      <div style="font-size:36px;margin-bottom:8px;">✅</div>
+      <h3 style="color:#4ade80;font-size:18px;margin:0;">Order Submitted!</h3>
+    </div>
+    <div id="orderResultTracking" style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:16px;margin-bottom:16px;"></div>
+    <div id="orderResultBreakdown" class="price-breakdown" style="margin-bottom:20px;"></div>
+    <div id="orderResultPaypal" style="margin-bottom:20px;"></div>
+    <button onclick="document.getElementById('orderResultModal').style.display='none';location.reload();"
+            class="btn btn-primary" style="width:100%;">Close &amp; Refresh</button>
   </div>
-  {% endfor %}
+</div>
+
+<!-- Inventory + Balance Row -->
+<div style="display:grid;grid-template-columns:1fr auto;gap:16px;align-items:start;margin-bottom:24px;">
+  <div>
+    <div class="section-title" style="margin-bottom:12px;">Your Inventory On Hand</div>
+    <div class="dealer-grid" style="margin-bottom:0;">
+      {% for slug, info in dealer_kits.items() %}
+      {% set row = inv[slug] %}
+      <div class="inv-card">
+        <div class="inv-count {% if row.sets_on_hand == 0 %}empty{% elif row.sets_on_hand <= 2 %}low{% endif %}">{{ row.sets_on_hand }}</div>
+        <div class="inv-label">{{ info.name }}</div>
+        <div class="inv-sub">sets on hand</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% if balance_owed > 0 %}
+  <div class="inv-card" style="min-width:160px;border-color:#f59e0b;">
+    <div class="inv-count" style="color:#fbbf24;font-size:28px;">${{ '%.2f' % balance_owed }}</div>
+    <div class="inv-label" style="color:#f59e0b;">Outstanding Balance</div>
+    <div class="inv-sub">pay to info@ecopowerparts.com</div>
+  </div>
+  {% endif %}
 </div>
 {% set total_sets = inv.values() | map(attribute='sets_on_hand') | sum %}
 {% if total_sets <= 4 %}
 <div style="background:#451a1a;border:1px solid #7f1d1d;border-radius:8px;padding:12px 16px;margin-bottom:20px;font-size:13px;color:#fca5a5;">
-  Low stock — use the Restock tab below to order more.
+  Running low — use the Restock tab to order more.
 </div>
 {% endif %}
 
@@ -490,8 +516,21 @@ function submitDropship() {
       notes: document.getElementById('ds-notes').value.trim()})
   }).then(r=>r.json()).then(d=>{
     if (d.ok) {
-      alert(`Order #${d.order_id} submitted! We'll notify you when it ships.`);
-      location.reload();
+      // Show result modal
+      const b = d.breakdown || {};
+      document.getElementById('orderResultTracking').innerHTML = d.tracking
+        ? `<div style="font-size:13px;color:#94a3b8;margin-bottom:4px;">Tracking Number</div>
+           <div style="font-size:22px;font-weight:700;color:#4fc3f7;font-family:monospace;">${d.tracking}</div>
+           <div style="font-size:11px;color:#4b5563;margin-top:4px;">Josh has been emailed the label.</div>`
+        : `<div style="color:#fbbf24;font-size:13px;">Label could not be purchased automatically. Josh will follow up.</div>`;
+      document.getElementById('orderResultBreakdown').innerHTML =
+        (b.pc > 0 ? `<div class="price-row"><span>Powder coat</span><span>$${b.pc.toFixed(2)}</span></div>` : '') +
+        `<div class="price-row"><span>Shipping</span><span>$${(b.shipping||0).toFixed(2)}</span></div>` +
+        `<div class="price-row total"><span>Total due</span><span>$${(b.total||0).toFixed(2)}</span></div>`;
+      document.getElementById('orderResultPaypal').innerHTML = d.paypal_url
+        ? `<a href="${d.paypal_url}" target="_blank" style="display:block;background:#0070ba;color:#fff;text-align:center;padding:12px 20px;border-radius:8px;font-weight:600;font-size:15px;text-decoration:none;">Pay $${(b.total||0).toFixed(2)} via PayPal →</a>`
+        : `<div style="font-size:12px;color:#4b5563;text-align:center;">PayPal invoice will be emailed to you.</div>`;
+      document.getElementById('orderResultModal').style.display = 'flex';
     } else { err.textContent=d.error||'Error'; err.style.display='block'; }
   });
 }
@@ -526,7 +565,16 @@ function submitRestock() {
     body: JSON.stringify({intake_qty: intakeQ, charge_qty: chargeQ,
                           notes: document.getElementById('rs-notes').value.trim()})
   }).then(r=>r.json()).then(d=>{
-    if (d.ok) { alert(`Restock request #${d.order_id} submitted! Total: $${d.total.toFixed(2)}. We'll send a PayPal invoice.`); location.reload(); }
+    if (d.ok) {
+      if (d.paypal_url) {
+        if (confirm(`Restock #${d.order_id}: $${d.total.toFixed(2)} due.\n\nClick OK to pay via PayPal now.`)) {
+          window.open(d.paypal_url, '_blank');
+        }
+      } else {
+        alert(`Restock #${d.order_id} submitted! Total: $${d.total.toFixed(2)}. A PayPal invoice will be emailed to you.`);
+      }
+      location.reload();
+    }
     else { err.textContent=d.error||'Error'; err.style.display='block'; }
   });
 }

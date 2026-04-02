@@ -57,6 +57,8 @@ def create_app():
     app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD', '')
     app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_DEFAULT_SENDER', 'info@ecopowerparts.com')
     app.config['SENDGRID_API_KEY'] = os.environ.get('SENDGRID_API_KEY', '')
+    app.config['PAYPAL_CLIENT_ID'] = os.environ.get('PAYPAL_CLIENT_ID', '')
+    app.config['PAYPAL_CLIENT_SECRET'] = os.environ.get('PAYPAL_CLIENT_SECRET', '')
 
     # Scheduler config
     app.config['SCHEDULER_API_ENABLED'] = False
@@ -1769,29 +1771,98 @@ def register_routes(app):
         'fusion_charge': {'name': 'Fusion Sport 2.7L Charge Pipes', 'retail': 600.0},
     }
     PC_OPTIONS = {
-        'raw':          ('Raw Aluminum', 0),
+        'raw':           ('Raw Aluminum', 0),
         'crinkle_black': ('Crinkle Black', 100),
-        'gloss_black':  ('Gloss Black', 100),
-        'satin_black':  ('Satin Black', 100),
-        'red':          ('Red', 150),
-        'blue':         ('Blue', 150),
-        'white':        ('White', 150),
+        'gloss_black':   ('Gloss Black', 100),
+        'satin_black':   ('Satin Black', 100),
+        'red':           ('Red', 150),
+        'blue':          ('Blue', 150),
+        'white':         ('White', 150),
     }
     SHIPPING_MARKUP = 15.0
     DEALER_EMAIL = 'troy@cd3performance.com'
     ADMIN_EMAIL = 'info@ecopowerparts.com'
 
+    def _get_dealer_inv_row(dealer_id, kit_slug):
+        """Return single canonical inventory row, deduplicating if needed."""
+        rows = DealerInventory.query.filter_by(
+            dealer_id=dealer_id, kit_slug=kit_slug
+        ).order_by(DealerInventory.id.desc()).all()
+        if not rows:
+            row = DealerInventory(dealer_id=dealer_id, kit_slug=kit_slug,
+                                  kit_name=DEALER_KITS[kit_slug]['name'], sets_on_hand=0)
+            db.session.add(row)
+            db.session.flush()
+            return row
+        # Delete older duplicates, keep highest id
+        for old in rows[1:]:
+            db.session.delete(old)
+        return rows[0]
+
     def _get_or_create_dealer_inventory(dealer_id):
         rows = {}
-        for slug, info in DEALER_KITS.items():
-            row = DealerInventory.query.filter_by(dealer_id=dealer_id, kit_slug=slug).first()
-            if not row:
-                row = DealerInventory(dealer_id=dealer_id, kit_slug=slug,
-                                      kit_name=info['name'], sets_on_hand=0)
-                db.session.add(row)
-            rows[slug] = row
+        for slug in DEALER_KITS:
+            rows[slug] = _get_dealer_inv_row(dealer_id, slug)
         db.session.commit()
         return rows
+
+    def _paypal_invoice(order_id, ship_name, invoice_items):
+        """
+        Create and send a PayPal invoice. invoice_items = [{name, amount}].
+        Returns payer_url or None on failure.
+        """
+        import requests as _req, base64 as _b64
+        client_id = current_app.config.get('PAYPAL_CLIENT_ID', '')
+        client_secret = current_app.config.get('PAYPAL_CLIENT_SECRET', '')
+        if not client_id or not client_secret:
+            return None
+        base = 'https://api-m.paypal.com'
+        # Get token
+        creds = _b64.b64encode(f'{client_id}:{client_secret}'.encode()).decode()
+        tr = _req.post(f'{base}/v1/oauth2/token',
+                       headers={'Authorization': f'Basic {creds}', 'Accept': 'application/json'},
+                       data='grant_type=client_credentials', timeout=15)
+        tr.raise_for_status()
+        token = tr.json()['access_token']
+        hdrs = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json',
+                'Prefer': 'return=representation'}
+        total = round(sum(i['amount'] for i in invoice_items), 2)
+        payload = {
+            'detail': {
+                'invoice_number': f'CD3-{order_id}',
+                'currency_code': 'USD',
+                'payment_term': {'term_type': 'DUE_ON_RECEIPT'},
+                'note': 'Thank you! Please pay upon receipt.',
+            },
+            'invoicer': {'name': {'business_name': 'EcoPowerParts'},
+                         'email_address': ADMIN_EMAIL},
+            'primary_recipients': [{'billing_info': {
+                'name': {'given_name': 'Troy', 'surname': 'Walls'},
+                'email_address': DEALER_EMAIL,
+            }}],
+            'items': [
+                {'name': i['name'], 'quantity': '1', 'unit_amount': {
+                    'currency_code': 'USD', 'value': f"{i['amount']:.2f}"}}
+                for i in invoice_items
+            ],
+            'amount': {'breakdown': {'item_total': {
+                'currency_code': 'USD', 'value': f'{total:.2f}'
+            }}},
+        }
+        cr = _req.post(f'{base}/v2/invoicing/invoices', json=payload, headers=hdrs, timeout=20)
+        cr.raise_for_status()
+        inv_data = cr.json()
+        inv_id = inv_data.get('id') or (inv_data.get('href', '').rsplit('/', 1)[-1])
+        if not inv_id:
+            return None
+        # Send the invoice (emails Troy + makes it payable)
+        _req.post(f'{base}/v2/invoicing/invoices/{inv_id}/send',
+                  json={'send_to_recipient': True}, headers=hdrs, timeout=20)
+        # Payer link
+        for link in inv_data.get('links', []):
+            if link.get('rel') == 'payer-view':
+                return link.get('href')
+        return f'https://www.paypal.com/invoice/p/#{inv_id}'
 
     @app.route('/dealer')
     @login_required
@@ -1799,33 +1870,48 @@ def register_routes(app):
         if current_user.role not in ('dealer', 'admin'):
             flash('Access denied', 'error')
             return redirect(url_for('dashboard'))
-        # For dealer: show their own data. For admin: show all dealers.
         if current_user.role == 'admin':
             dealers = User.query.filter_by(role='dealer').all()
             all_orders = DealerOrder.query.order_by(DealerOrder.created_at.desc()).limit(100).all()
-            all_inv = DealerInventory.query.all()
+            all_inv = DealerInventory.query.order_by(DealerInventory.id.desc()).all()
+            # Dedup for display — only show the row with highest id per (dealer_id, kit_slug)
+            seen = set()
+            unique_inv = []
+            for row in all_inv:
+                key = (row.dealer_id, row.kit_slug)
+                if key not in seen:
+                    seen.add(key)
+                    unique_inv.append(row)
             return render_template('dealer.html',
                                    is_admin=True, dealers=dealers,
-                                   all_orders=all_orders, all_inv=all_inv,
+                                   all_orders=all_orders, all_inv=unique_inv,
                                    dealer_kits=DEALER_KITS, pc_options=PC_OPTIONS)
         # Dealer view
         inv = _get_or_create_dealer_inventory(current_user.id)
         orders = DealerOrder.query.filter_by(dealer_id=current_user.id)\
                                   .order_by(DealerOrder.created_at.desc()).limit(50).all()
+        # Outstanding balance = sum of total_owed on shipped (unpaid) orders
+        balance_owed = sum(
+            (o.total_owed or 0) for o in orders
+            if o.order_type == 'dropship' and o.status in ('shipped', 'pending')
+               and o.total_owed and o.total_owed > 0
+        )
         return render_template('dealer.html',
                                is_admin=False, inv=inv,
                                orders=orders, dealer_kits=DEALER_KITS, pc_options=PC_OPTIONS,
-                               shipping_markup=SHIPPING_MARKUP)
+                               balance_owed=balance_owed)
 
     @app.route('/api/dealer/dropship', methods=['POST'])
     @login_required
     def dealer_dropship():
         if current_user.role not in ('dealer', 'admin'):
             return jsonify({'error': 'Access denied'}), 403
+        import json as _json
+        from shipstation import create_label, email_label_to_josh
         data = request.get_json()
         dealer_id = current_user.id if current_user.role == 'dealer' else int(data.get('dealer_id', current_user.id))
 
-        items = data.get('items', [])  # [{kit_slug, powder_coat}]
+        items = data.get('items', [])
         if not items:
             return jsonify({'error': 'No items selected'}), 400
 
@@ -1833,7 +1919,7 @@ def register_routes(app):
         if not ship.get('name') or not ship.get('address1') or not ship.get('city') or not ship.get('zip'):
             return jsonify({'error': 'Ship-to address required'}), 400
 
-        # Validate items and compute PC cost
+        # Validate + enrich items
         pc_total = 0
         enriched = []
         for item in items:
@@ -1845,26 +1931,68 @@ def register_routes(app):
                 return jsonify({'error': f'Unknown powder coat: {pc_key}'}), 400
             pc_label, pc_cost = PC_OPTIONS[pc_key]
             pc_total += pc_cost
-            enriched.append({
-                'kit_slug': slug,
-                'kit_name': DEALER_KITS[slug]['name'],
-                'powder_coat': pc_key,
-                'pc_label': pc_label,
-                'pc_cost': pc_cost,
-            })
+            enriched.append({'kit_slug': slug, 'kit_name': DEALER_KITS[slug]['name'],
+                              'powder_coat': pc_key, 'pc_label': pc_label, 'pc_cost': pc_cost})
 
-        # Check dealer inventory
-        import json as _json
+        # Check inventory
         inv = _get_or_create_dealer_inventory(dealer_id)
         for item in enriched:
-            slug = item['kit_slug']
-            if inv[slug].sets_on_hand < 1:
-                return jsonify({'error': f'No {DEALER_KITS[slug]["name"]} sets on hand'}), 400
+            if inv[item['kit_slug']].sets_on_hand < 1:
+                return jsonify({'error': f'No {DEALER_KITS[item["kit_slug"]]["name"]} sets on hand'}), 400
 
+        # ShipStation ship_to format
+        ss_ship_to = {
+            'name': ship.get('name', ''),
+            'address_line1': ship.get('address1', ''),
+            'city_locality': ship.get('city', ''),
+            'state_province': ship.get('state', ''),
+            'postal_code': ship.get('zip', ''),
+            'country_code': 'US',
+            'phone': ship.get('phone', '') or '4805550000',
+        }
+
+        # Buy a label per item
+        tracking_numbers = []
+        label_errors = []
+        shipping_cost_total = 0.0
+        for item in enriched:
+            try:
+                label = create_label(
+                    f"CD3-{data.get('po_ref','0')}", item['kit_name'], 1,
+                    ss_ship_to, order_total=0
+                )
+                tracking = label.get('tracking_number', '')
+                tracking_numbers.append(tracking)
+                # Extract cost from label response
+                cost_obj = label.get('shipment_cost')
+                if isinstance(cost_obj, dict):
+                    cost = float(cost_obj.get('amount', 0))
+                elif cost_obj is not None:
+                    cost = float(cost_obj)
+                else:
+                    cost = 0.0
+                shipping_cost_total += cost
+                # Email Josh
+                try:
+                    email_label_to_josh(
+                        f"CD3-{data.get('po_ref','0')}", item['kit_name'],
+                        ship.get('name', ''), label, ship_to=ss_ship_to
+                    )
+                except Exception as e:
+                    current_app.logger.error(f'CD3 Josh email error: {e}')
+            except Exception as e:
+                current_app.logger.error(f'CD3 label error for {item["kit_name"]}: {e}')
+                label_errors.append(str(e))
+
+        tracking_str = ', '.join(t for t in tracking_numbers if t)
+        # Charge = PC + (actual shipping + $15 markup), no mention of $15 to dealer
+        total_charged = round(pc_total + shipping_cost_total + SHIPPING_MARKUP, 2)
+
+        # Save order
         order = DealerOrder(
             dealer_id=dealer_id,
             order_type='dropship',
-            status='pending',
+            status='shipped' if tracking_str else 'pending',
             po_ref=data.get('po_ref', ''),
             ship_to_name=ship.get('name', ''),
             ship_to_address1=ship.get('address1', ''),
@@ -1875,41 +2003,52 @@ def register_routes(app):
             ship_to_phone=ship.get('phone', ''),
             items_json=_json.dumps(enriched),
             pc_cost=pc_total,
+            shipping_cost=shipping_cost_total,
             shipping_markup=SHIPPING_MARKUP,
+            total_owed=total_charged,
+            tracking_number=tracking_str,
             notes=data.get('notes', ''),
         )
+        if tracking_str:
+            order.shipped_at = datetime.now(timezone.utc)
         db.session.add(order)
 
-        # Decrement dealer inventory immediately
+        # Decrement inventory
         for item in enriched:
             inv[item['kit_slug']].sets_on_hand = max(0, inv[item['kit_slug']].sets_on_hand - 1)
 
         db.session.commit()
 
-        # Email notification to admin
-        item_lines = '\n'.join(f"  - {i['kit_name']} | PC: {i['pc_label']} (+${i['pc_cost']})" for i in enriched)
-        body = (
-            f"New dealer drop-ship order #{order.id}\n"
-            f"Dealer: CD3 Performance (troy@cd3performance.com)\n"
-            f"PO Ref: {order.po_ref or 'N/A'}\n\n"
-            f"Items:\n{item_lines}\n\n"
-            f"Ship To:\n"
-            f"  {ship.get('name')}\n"
-            f"  {ship.get('address1')}\n"
-            f"  {ship.get('city')}, {ship.get('state')} {ship.get('zip')}\n"
-            f"  {ship.get('email', '')}\n"
-            f"  {ship.get('phone', '')}\n\n"
-            f"Powder coat total: ${pc_total:.2f}\n"
-            f"Shipping + ${SHIPPING_MARKUP:.0f} markup to be added when shipped.\n\n"
-            f"Notes: {order.notes or 'None'}\n\n"
-            f"Mark shipped at: https://epp-inventory.onrender.com/dealer"
-        )
-        try:
-            _smtp_send(ADMIN_EMAIL, f'[CD3 Drop-Ship] Order #{order.id} — {ship.get("name")}', body)
-        except Exception as e:
-            current_app.logger.error(f'Dealer email failed: {e}')
+        # Build PayPal invoice items (no mention of $15 markup — bundled into shipping)
+        paypal_items = []
+        if pc_total > 0:
+            # List each PC item
+            for item in enriched:
+                if item['pc_cost'] > 0:
+                    paypal_items.append({'name': f"{item['kit_name']} — {item['pc_label']} Powder Coat",
+                                         'amount': float(item['pc_cost'])})
+        shipping_charged = round(shipping_cost_total + SHIPPING_MARKUP, 2)
+        paypal_items.append({'name': 'Shipping', 'amount': shipping_charged})
 
-        return jsonify({'ok': True, 'order_id': order.id})
+        paypal_url = None
+        try:
+            paypal_url = _paypal_invoice(order.id, ship.get('name', ''), paypal_items)
+        except Exception as e:
+            current_app.logger.error(f'PayPal invoice error: {e}')
+
+        resp = {
+            'ok': True,
+            'order_id': order.id,
+            'tracking': tracking_str or None,
+            'label_errors': label_errors,
+            'breakdown': {
+                'pc': pc_total,
+                'shipping': shipping_charged,
+                'total': total_charged,
+            },
+            'paypal_url': paypal_url,
+        }
+        return jsonify(resp)
 
     @app.route('/api/dealer/restock', methods=['POST'])
     @login_required
@@ -1930,81 +2069,45 @@ def register_routes(app):
         total = round((intake_qty * intake_retail + charge_qty * charge_retail) * (1 - discount), 2)
 
         order = DealerOrder(
-            dealer_id=dealer_id,
-            order_type='restock',
-            status='pending',
-            intake_qty=intake_qty,
-            charge_qty=charge_qty,
-            discount_pct=20,
-            restock_total=total,
+            dealer_id=dealer_id, order_type='restock', status='pending',
+            intake_qty=intake_qty, charge_qty=charge_qty,
+            discount_pct=20, restock_total=total,
             notes=data.get('notes', ''),
         )
         db.session.add(order)
         db.session.commit()
 
+        # PayPal invoice for restock
+        paypal_url = None
+        try:
+            restock_items = [
+                {'name': f'Fusion Intake Pipes × {intake_qty} (20% dealer discount)', 'amount': round(intake_qty * intake_retail * 0.8, 2)},
+                {'name': f'Fusion Charge Pipes × {charge_qty} (20% dealer discount)', 'amount': round(charge_qty * charge_retail * 0.8, 2)},
+            ]
+            paypal_url = _paypal_invoice(f'RS-{order.id}', 'Troy Walls', restock_items)
+        except Exception as e:
+            current_app.logger.error(f'Restock PayPal error: {e}')
+
         # Email admin
         body = (
             f"Dealer restock request #{order.id}\n"
             f"Dealer: CD3 Performance (troy@cd3performance.com)\n\n"
-            f"  Fusion Intake Pipes: {intake_qty} sets × ${intake_retail:.0f} = ${intake_qty * intake_retail:.2f}\n"
-            f"  Fusion Charge Pipes: {charge_qty} sets × ${charge_retail:.0f} = ${charge_qty * charge_retail:.2f}\n"
-            f"  20% dealer discount: -${(intake_qty * intake_retail + charge_qty * charge_retail) * discount:.2f}\n"
+            f"  Fusion Intake × {intake_qty}: ${intake_qty * intake_retail * 0.8:.2f}\n"
+            f"  Fusion Charge × {charge_qty}: ${charge_qty * charge_retail * 0.8:.2f}\n"
             f"  TOTAL DUE: ${total:.2f}\n\n"
-            f"Payment via PayPal to info@ecopowerparts.com\n\n"
-            f"Confirm receipt at: https://epp-inventory.onrender.com/dealer"
+            + (f"PayPal invoice: {paypal_url}\n\n" if paypal_url else "")
+            + f"Confirm receipt at: https://epp-inventory.onrender.com/dealer"
         )
         try:
             _smtp_send(ADMIN_EMAIL, f'[CD3 Restock] Request #{order.id} — ${total:.2f}', body)
-            _smtp_send(DEALER_EMAIL, f'[CD3 Restock] Invoice #{order.id} — ${total:.2f} due', body)
         except Exception as e:
             current_app.logger.error(f'Restock email failed: {e}')
 
-        return jsonify({'ok': True, 'order_id': order.id, 'total': total})
-
-    @app.route('/api/dealer/order/<int:order_id>/ship', methods=['POST'])
-    @login_required
-    def dealer_order_ship(order_id):
-        if current_user.role != 'admin':
-            return jsonify({'error': 'Admin only'}), 403
-        data = request.get_json()
-        order = DealerOrder.query.get_or_404(order_id)
-        tracking = data.get('tracking', '').strip()
-        shipping_cost = float(data.get('shipping_cost', 0))
-
-        order.status = 'shipped'
-        order.tracking_number = tracking
-        order.shipping_cost = shipping_cost
-        order.total_owed = round(order.pc_cost + shipping_cost + order.shipping_markup, 2)
-        from datetime import datetime, timezone as _tz
-        order.shipped_at = datetime.now(_tz.utc)
-        db.session.commit()
-
-        # Email dealer with tracking + amount owed
-        import json as _json
-        items = _json.loads(order.items_json or '[]')
-        item_lines = '\n'.join(f"  - {i['kit_name']} | {i['pc_label']}" for i in items)
-        body = (
-            f"Your order #{order.id} has shipped!\n\n"
-            f"Tracking: {tracking}\n\n"
-            f"Items:\n{item_lines}\n\n"
-            f"Shipped to: {order.ship_to_name}, {order.ship_to_city}, {order.ship_to_state}\n\n"
-            f"Amount owed:\n"
-            f"  Powder coat: ${order.pc_cost:.2f}\n"
-            f"  Shipping: ${shipping_cost:.2f} + ${order.shipping_markup:.0f} handling = ${shipping_cost + order.shipping_markup:.2f}\n"
-            f"  TOTAL: ${order.total_owed:.2f}\n\n"
-            f"Please send ${order.total_owed:.2f} to info@ecopowerparts.com via PayPal.\n\nThank you!"
-        )
-        try:
-            _smtp_send(DEALER_EMAIL, f'[CD3] Order #{order.id} shipped — ${order.total_owed:.2f} due', body)
-        except Exception as e:
-            current_app.logger.error(f'Ship notification email failed: {e}')
-
-        return jsonify({'ok': True, 'total_owed': order.total_owed})
+        return jsonify({'ok': True, 'order_id': order.id, 'total': total, 'paypal_url': paypal_url})
 
     @app.route('/api/dealer/order/<int:order_id>/confirm-restock', methods=['POST'])
     @login_required
     def dealer_confirm_restock(order_id):
-        """Admin confirms payment received for a restock order — adds to dealer inventory."""
         if current_user.role != 'admin':
             return jsonify({'error': 'Admin only'}), 403
         order = DealerOrder.query.get_or_404(order_id)
@@ -2012,15 +2115,12 @@ def register_routes(app):
             return jsonify({'error': 'Not a restock order'}), 400
         if order.status == 'complete':
             return jsonify({'error': 'Already confirmed'}), 400
-
         inv = _get_or_create_dealer_inventory(order.dealer_id)
         inv['fusion_intake'].sets_on_hand += order.intake_qty
         inv['fusion_charge'].sets_on_hand += order.charge_qty
         order.status = 'complete'
-        from datetime import datetime, timezone as _tz
-        order.shipped_at = datetime.now(_tz.utc)
+        order.shipped_at = datetime.now(timezone.utc)
         db.session.commit()
-
         return jsonify({'ok': True,
                         'intake_on_hand': inv['fusion_intake'].sets_on_hand,
                         'charge_on_hand': inv['fusion_charge'].sets_on_hand})
@@ -2028,7 +2128,6 @@ def register_routes(app):
     @app.route('/api/dealer/inventory/set', methods=['POST'])
     @login_required
     def dealer_inventory_set():
-        """Admin manually sets dealer inventory count."""
         if current_user.role != 'admin':
             return jsonify({'error': 'Admin only'}), 403
         data = request.get_json()
@@ -2037,11 +2136,10 @@ def register_routes(app):
         qty = int(data.get('qty', 0))
         if kit_slug not in DEALER_KITS:
             return jsonify({'error': 'Invalid kit_slug'}), 400
-
-        inv = _get_or_create_dealer_inventory(dealer_id)
-        inv[kit_slug].sets_on_hand = max(0, qty)
+        row = _get_dealer_inv_row(dealer_id, kit_slug)
+        row.sets_on_hand = max(0, qty)
         db.session.commit()
-        return jsonify({'ok': True, 'sets_on_hand': inv[kit_slug].sets_on_hand})
+        return jsonify({'ok': True, 'sets_on_hand': row.sets_on_hand})
 
     # ── Health Check ─────────────────────────────────────────────
 
