@@ -125,6 +125,11 @@ def create_app():
         if 'unit_cost' not in comp_cols:
             db.session.execute(db.text("ALTER TABLE components ADD COLUMN unit_cost FLOAT DEFAULT 0"))
             db.session.commit()
+        # Add must_change_password column to users if missing
+        user_cols = [c['name'] for c in inspector.get_columns('users')]
+        if 'must_change_password' not in user_cols:
+            db.session.execute(db.text("ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT FALSE"))
+            db.session.commit()
         from seed_data import seed_database
         seed_database()
         # Update kit prices from seed data
@@ -2087,8 +2092,10 @@ def register_routes(app):
         if intake_qty < 5 or charge_qty < 5:
             return jsonify({'error': 'Minimum 5 sets each of intake and charge pipes required for bulk discount'}), 400
 
-        intake_retail = DEALER_KITS['fusion_intake']['retail']
-        charge_retail = DEALER_KITS['fusion_charge']['retail']
+        intake_kit = Kit.query.filter_by(slug='fusion_intake').first()
+        charge_kit = Kit.query.filter_by(slug='fusion_charge').first()
+        intake_retail = (intake_kit.retail_price if intake_kit and intake_kit.retail_price else DEALER_KITS['fusion_intake']['retail'])
+        charge_retail = (charge_kit.retail_price if charge_kit and charge_kit.retail_price else DEALER_KITS['fusion_charge']['retail'])
         discount = 0.20
         total = round((intake_qty * intake_retail + charge_qty * charge_retail) * (1 - discount), 2)
 
