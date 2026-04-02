@@ -245,6 +245,7 @@ class DealerOrder(db.Model):
     restock_total = db.Column(db.Float, default=0)
     # Fulfillment
     tracking_number = db.Column(db.String(200))
+    label_url = db.Column(db.String(500), default='')  # ShipStation label PDF download URL
     notes = db.Column(db.Text, default='')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     shipped_at = db.Column(db.DateTime)

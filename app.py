@@ -130,6 +130,12 @@ def create_app():
         if 'must_change_password' not in user_cols:
             db.session.execute(db.text("ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT FALSE"))
             db.session.commit()
+        # Add label_url column to dealer_orders if missing
+        if db.inspect(db.engine).has_table('dealer_orders'):
+            do_cols = [c['name'] for c in inspector.get_columns('dealer_orders')]
+            if 'label_url' not in do_cols:
+                db.session.execute(db.text("ALTER TABLE dealer_orders ADD COLUMN label_url VARCHAR(500) DEFAULT ''"))
+                db.session.commit()
         # Add notes column to kits if missing
         if 'notes' not in kit_cols:
             db.session.execute(db.text("ALTER TABLE kits ADD COLUMN notes VARCHAR(200) DEFAULT ''"))
@@ -2039,6 +2045,7 @@ def register_routes(app):
         # Buy a label per item
         tracking_numbers = []
         label_errors = []
+        label_urls = []
         shipping_cost_total = 0.0
         for item in enriched:
             try:
@@ -2057,7 +2064,10 @@ def register_routes(app):
                 else:
                     cost = 0.0
                 shipping_cost_total += cost
-                # Email Josh
+                # Store label URL for later PDF attachment
+                dl = label.get('label_download', {})
+                label_urls.append(dl.get('pdf') or dl.get('href') or '')
+                # Email Josh with label attached
                 try:
                     email_label_to_josh(
                         f"CD3-{data.get('po_ref','0')}", item['kit_name'],
@@ -2092,6 +2102,7 @@ def register_routes(app):
             shipping_markup=SHIPPING_MARKUP,
             total_owed=total_charged,
             tracking_number=tracking_str,
+            label_url=', '.join(u for u in label_urls if u),
             notes=data.get('notes', ''),
         )
         if tracking_str:
@@ -2306,24 +2317,26 @@ def register_routes(app):
         items_list = _json.loads(order.items_json or '[]')
         items_desc = ', '.join(i['kit_name'] for i in items_list)
 
-        # Email Josh to fulfill (or confirm it's been shipped)
+        # Email Josh with label PDF attached
         try:
-            josh_lines = [
-                f"CD3 Performance drop-ship — please ship or confirm shipped:",
-                f"",
-                f"ITEM:     {items_desc}",
-                f"SHIP TO:  {order.ship_to_name}",
-                f"          {order.ship_to_address1}",
-                f"          {order.ship_to_city}, {order.ship_to_state} {order.ship_to_zip}",
-                f"          Phone: {order.ship_to_phone or 'N/A'}",
-                f"",
-                f"TRACKING: {tracking}",
-            ]
-            mail.send_message(
-                subject=f"CD3 Drop-Ship — {order.ship_to_name} ({items_desc})",
-                recipients=['Durmajdesigns@gmail.com', ADMIN_EMAIL],
-                body='\n'.join(josh_lines)
-            )
+            from shipstation import email_label_to_josh as _etj, _fetch_label_pdf
+            # Construct minimal label_data so email_label_to_josh can attach PDF
+            label_data = {
+                'tracking_number': tracking,
+                'carrier_code': 'ups',
+                'service_code': 'ups_ground',
+                'label_download': {'pdf': order.label_url or '', 'href': order.label_url or ''},
+            }
+            ss_ship_to = {
+                'name': order.ship_to_name,
+                'address_line1': order.ship_to_address1,
+                'city_locality': order.ship_to_city,
+                'state_province': order.ship_to_state,
+                'postal_code': order.ship_to_zip,
+                'country_code': 'US',
+                'phone': order.ship_to_phone or '',
+            }
+            _etj(f"CD3-{order_id}", items_desc, order.ship_to_name, label_data, ship_to=ss_ship_to)
         except Exception as e:
             current_app.logger.error(f'Josh ship email error for order {order_id}: {e}')
 

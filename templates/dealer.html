@@ -98,7 +98,7 @@
           {% set items = o.items_json | from_json %}
           {{ items | map(attribute='kit_name') | join(', ') if items else '—' }}<br>
           <span style="color:#64748b;">→ {{ o.ship_to_name }}, {{ o.ship_to_city }}, {{ o.ship_to_state }}</span>
-          {% if o.tracking_number %}<br><span style="color:#4fc3f7;">🚚 {{ o.tracking_number }}</span>{% endif %}
+          {% if o.tracking_number %}<br><a href="https://www.ups.com/track?tracknum={{ o.tracking_number }}" target="_blank" style="color:#4fc3f7;text-decoration:none;">🚚 {{ o.tracking_number }}</a>{% endif %}
           {% if o.total_owed %}<br><span style="color:#fbbf24;">Owed: ${{ '%.2f' % o.total_owed }}</span>{% endif %}
         {% else %}
           {{ o.intake_qty }} intake + {{ o.charge_qty }} charge sets<br>
@@ -330,7 +330,7 @@
             {% set items = o.items_json | from_json %}
             {{ items | map(attribute='kit_name') | join(', ') if items else '—' }}<br>
             <span style="color:#64748b;">→ {{ o.ship_to_name }}, {{ o.ship_to_city }}</span>
-            {% if o.tracking_number %}<br><span style="color:#4fc3f7;">🚚 {{ o.tracking_number }}</span>{% endif %}
+            {% if o.tracking_number %}<br><a href="https://www.ups.com/track?tracknum={{ o.tracking_number }}" target="_blank" style="color:#4fc3f7;text-decoration:none;">🚚 {{ o.tracking_number }}</a>{% endif %}
           {% else %}
             {{ o.intake_qty }} intake + {{ o.charge_qty }} charge
           {% endif %}
