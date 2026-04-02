@@ -2303,10 +2303,32 @@ def register_routes(app):
         except Exception as e:
             current_app.logger.error(f'PayPal invoice error for order {order_id}: {e}')
 
-        # Email dealer
+        items_list = _json.loads(order.items_json or '[]')
+        items_desc = ', '.join(i['kit_name'] for i in items_list)
+
+        # Email Josh to fulfill (or confirm it's been shipped)
         try:
-            items_list = _json.loads(order.items_json or '[]')
-            items_desc = ', '.join(i['kit_name'] for i in items_list)
+            josh_lines = [
+                f"CD3 Performance drop-ship — please ship or confirm shipped:",
+                f"",
+                f"ITEM:     {items_desc}",
+                f"SHIP TO:  {order.ship_to_name}",
+                f"          {order.ship_to_address1}",
+                f"          {order.ship_to_city}, {order.ship_to_state} {order.ship_to_zip}",
+                f"          Phone: {order.ship_to_phone or 'N/A'}",
+                f"",
+                f"TRACKING: {tracking}",
+            ]
+            mail.send_message(
+                subject=f"CD3 Drop-Ship — {order.ship_to_name} ({items_desc})",
+                recipients=['Durmajdesigns@gmail.com', ADMIN_EMAIL],
+                body='\n'.join(josh_lines)
+            )
+        except Exception as e:
+            current_app.logger.error(f'Josh ship email error for order {order_id}: {e}')
+
+        # Email dealer: shipped notice + PayPal
+        try:
             body_lines = [
                 f"Your drop-ship order has been fulfilled and is on its way!",
                 f"",
