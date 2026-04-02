@@ -1713,6 +1713,7 @@ def register_routes(app):
         if not user:
             return jsonify({'error': 'User not found'}), 404
         user.set_password(new_pw)
+        user.must_change_password = True
         db.session.commit()
         return jsonify({'ok': True, 'email': email})
 
