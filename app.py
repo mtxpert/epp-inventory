@@ -503,6 +503,8 @@ def register_routes(app):
             user = User.query.filter_by(email=email).first()
             if user and user.check_password(password):
                 login_user(user, remember=True)
+                if user.must_change_password:
+                    return redirect(url_for('force_change_password'))
                 next_page = request.args.get('next')
                 if not next_page and user.role == 'dealer':
                     return redirect(url_for('dealer_portal'))
@@ -529,8 +531,29 @@ def register_routes(app):
         if len(new_pw) < 8:
             return jsonify({'error': 'Password must be at least 8 characters'}), 400
         current_user.set_password(new_pw)
+        current_user.must_change_password = False
         db.session.commit()
         return jsonify({'ok': True})
+
+    @app.route('/force-change-password', methods=['GET', 'POST'])
+    @login_required
+    def force_change_password():
+        if not current_user.must_change_password:
+            return redirect(url_for('dealer_portal') if current_user.role == 'dealer' else url_for('dashboard'))
+        error = None
+        if request.method == 'POST':
+            new_pw = request.form.get('new_password', '')
+            confirm = request.form.get('confirm_password', '')
+            if len(new_pw) < 8:
+                error = 'Password must be at least 8 characters.'
+            elif new_pw != confirm:
+                error = 'Passwords do not match.'
+            else:
+                current_user.set_password(new_pw)
+                current_user.must_change_password = False
+                db.session.commit()
+                return redirect(url_for('dealer_portal') if current_user.role == 'dealer' else url_for('dashboard'))
+        return render_template('force_change_password.html', error=error)
 
     # ── Admin Routes ─────────────────────────────────────────────
 
@@ -555,7 +578,8 @@ def register_routes(app):
         if User.query.filter_by(email=email).first():
             flash('Email already exists', 'error')
             return redirect(url_for('admin_users'))
-        user = User(email=email, name=name, role=role)
+        user = User(email=email, name=name, role=role,
+                    must_change_password=(role == 'dealer'))
         user.set_password(password)
         db.session.add(user)
         db.session.commit()
