@@ -1,0 +1,484 @@
+{% extends "base.html" %}
+{% block title %}{% if is_admin %}Dealer Portal — Admin{% else %}CD3 Performance Portal{% endif %}{% endblock %}
+
+{% block content %}
+<style>
+  .dealer-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 28px; }
+  .inv-card { background: #111827; border: 1px solid #1e293b; border-radius: 12px; padding: 20px; text-align: center; }
+  .inv-card .inv-count { font-size: 48px; font-weight: 700; color: #4fc3f7; line-height: 1; }
+  .inv-card .inv-count.low { color: #fbbf24; }
+  .inv-card .inv-count.empty { color: #f87171; }
+  .inv-card .inv-label { font-size: 13px; color: #94a3b8; margin-top: 6px; }
+  .inv-card .inv-sub { font-size: 11px; color: #4b5563; margin-top: 4px; }
+  .form-group { margin-bottom: 14px; }
+  .form-group label { display: block; font-size: 12px; color: #94a3b8; margin-bottom: 4px; font-weight: 500; }
+  .form-input { width: 100%; padding: 8px 12px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 13px; box-sizing: border-box; }
+  .form-input:focus { outline: none; border-color: #4fc3f7; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .form-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  .kit-selector { border: 1px solid #374151; border-radius: 8px; padding: 14px; margin-bottom: 10px; background: #0f172a; }
+  .kit-selector input[type=checkbox] { margin-right: 8px; }
+  .kit-selector label { font-size: 14px; color: #e0e0e0; font-weight: 500; cursor: pointer; }
+  .pc-select { margin-top: 10px; display: none; }
+  .order-row-pending { border-left: 3px solid #f59e0b; }
+  .order-row-shipped { border-left: 3px solid #3b82f6; }
+  .order-row-complete { border-left: 3px solid #10b981; }
+  .order-row-cancelled { border-left: 3px solid #6b7280; }
+  .status-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .status-pending { background: #78350f; color: #fde68a; }
+  .status-shipped { background: #1e3a5f; color: #93c5fd; }
+  .status-complete { background: #14532d; color: #86efac; }
+  .status-cancelled { background: #1f2937; color: #9ca3af; }
+  .section-title { font-size: 15px; color: #4fc3f7; margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid #1e293b; font-weight: 600; }
+  .price-breakdown { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 12px 16px; font-size: 13px; }
+  .price-row { display: flex; justify-content: space-between; padding: 3px 0; color: #94a3b8; }
+  .price-row.total { color: #4fc3f7; font-weight: 700; font-size: 15px; border-top: 1px solid #1e293b; margin-top: 6px; padding-top: 8px; }
+  .restock-note { background: #1c1917; border: 1px solid #44403c; border-radius: 8px; padding: 12px 16px; font-size: 13px; color: #a8a29e; margin-bottom: 16px; }
+  .admin-set-inv { display: flex; gap: 6px; align-items: center; }
+  .admin-set-inv input { width: 60px; padding: 4px 8px; background: #1f2937; border: 1px solid #374151; border-radius: 4px; color: #e0e0e0; font-size: 13px; text-align: center; }
+</style>
+
+<h1 style="font-size:20px;color:#f1f5f9;margin-bottom:4px;">
+  {% if is_admin %}Dealer Portal{% else %}CD3 Performance Portal{% endif %}
+</h1>
+<p style="color:#64748b;font-size:13px;margin-bottom:24px;">
+  {% if is_admin %}Manage dealer inventory, orders, and restocks.{% else %}Welcome, Troy. Place drop-ship orders or request a restock below.{% endif %}
+</p>
+
+{% if is_admin %}
+<!-- ═══════════ ADMIN VIEW ═══════════ -->
+
+<!-- Dealer Inventory Overview -->
+<div class="section-title">CD3 Performance — Inventory On Hand</div>
+{% set cd3_inv = {} %}
+{% for row in all_inv %}{% if cd3_inv.update({row.kit_slug: row}) %}{% endif %}{% endfor %}
+<div class="dealer-grid" style="margin-bottom:32px;">
+  {% for slug, info in dealer_kits.items() %}
+  {% set row = all_inv | selectattr('kit_slug','equalto',slug) | list | first %}
+  {% set count = row.sets_on_hand if row else 0 %}
+  <div class="inv-card">
+    <div class="inv-count {% if count == 0 %}empty{% elif count <= 2 %}low{% endif %}">{{ count }}</div>
+    <div class="inv-label">{{ info.name }}</div>
+    <div class="inv-sub">sets on hand</div>
+    {% if row %}
+    <div class="admin-set-inv" style="margin-top:10px;justify-content:center;">
+      <input type="number" id="inv-{{ slug }}" value="{{ count }}" min="0" style="width:70px;">
+      <button class="btn btn-primary btn-sm" onclick="adminSetInv('{{ row.dealer_id }}','{{ slug }}')">Set</button>
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Pending Orders -->
+<div class="section-title">Orders</div>
+<div class="card" style="padding:0;overflow:hidden;">
+  <table>
+    <thead><tr>
+      <th>#</th><th>Type</th><th>Status</th><th>Details</th><th>Created</th><th>Actions</th>
+    </tr></thead>
+    <tbody>
+    {% for o in all_orders %}
+    <tr class="order-row-{{ o.status }}">
+      <td style="font-weight:600;color:#94a3b8;">{{ o.id }}</td>
+      <td>
+        {% if o.order_type == 'dropship' %}<span style="color:#a78bfa;">Drop-Ship</span>
+        {% else %}<span style="color:#34d399;">Restock</span>{% endif %}
+      </td>
+      <td><span class="status-badge status-{{ o.status }}">{{ o.status }}</span></td>
+      <td style="font-size:12px;">
+        {% if o.order_type == 'dropship' %}
+          {% set items = o.items_json | from_json %}
+          {{ items | map(attribute='kit_name') | join(', ') if items else '—' }}<br>
+          <span style="color:#64748b;">→ {{ o.ship_to_name }}, {{ o.ship_to_city }}, {{ o.ship_to_state }}</span>
+          {% if o.tracking_number %}<br><span style="color:#4fc3f7;">🚚 {{ o.tracking_number }}</span>{% endif %}
+          {% if o.total_owed %}<br><span style="color:#fbbf24;">Owed: ${{ '%.2f' % o.total_owed }}</span>{% endif %}
+        {% else %}
+          {{ o.intake_qty }} intake + {{ o.charge_qty }} charge sets<br>
+          <span style="color:#34d399;">${{ '%.2f' % o.restock_total }}</span>
+        {% endif %}
+      </td>
+      <td style="font-size:12px;color:#64748b;">{{ o.created_at.strftime('%b %d') }}</td>
+      <td>
+        {% if o.order_type == 'dropship' and o.status == 'pending' %}
+        <button class="btn btn-primary btn-sm" onclick="showShipModal({{ o.id }}, {{ o.pc_cost }})">Mark Shipped</button>
+        {% elif o.order_type == 'restock' and o.status == 'pending' %}
+        <button class="btn btn-success btn-sm" onclick="confirmRestock({{ o.id }})">Confirm Payment</button>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" style="text-align:center;color:#4b5563;padding:24px;">No orders yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Ship Modal -->
+<div id="shipModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:#1e293b;border:1px solid #334155;border-radius:10px;padding:28px 32px;width:400px;max-width:90vw;">
+    <h3 style="margin:0 0 18px;color:#f1f5f9;font-size:16px;">Mark Order Shipped</h3>
+    <input type="hidden" id="shipOrderId">
+    <div class="form-group">
+      <label>Tracking Number</label>
+      <input type="text" id="shipTracking" class="form-input" placeholder="1Z...">
+    </div>
+    <div class="form-group">
+      <label>Actual Shipping Cost ($)</label>
+      <input type="number" id="shipCost" class="form-input" step="0.01" min="0" placeholder="0.00">
+    </div>
+    <div id="shipBreakdown" style="margin-bottom:16px;"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button onclick="document.getElementById('shipModal').style.display='none'" style="background:#334155;color:#94a3b8;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;">Cancel</button>
+      <button onclick="submitShip()" class="btn btn-success">Send & Notify</button>
+    </div>
+  </div>
+</div>
+
+{% else %}
+<!-- ═══════════ DEALER VIEW ═══════════ -->
+
+<!-- Inventory Summary -->
+<div class="section-title">Your Inventory On Hand</div>
+<div class="dealer-grid">
+  {% for slug, info in dealer_kits.items() %}
+  {% set row = inv[slug] %}
+  <div class="inv-card">
+    <div class="inv-count {% if row.sets_on_hand == 0 %}empty{% elif row.sets_on_hand <= 2 %}low{% endif %}">{{ row.sets_on_hand }}</div>
+    <div class="inv-label">{{ info.name }}</div>
+    <div class="inv-sub">sets on hand · retail ${{ info.retail | int }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% set total_sets = inv.values() | map(attribute='sets_on_hand') | sum %}
+{% if total_sets <= 4 %}
+<div style="background:#451a1a;border:1px solid #7f1d1d;border-radius:8px;padding:12px 16px;margin-bottom:20px;font-size:13px;color:#fca5a5;">
+  Low stock — use the Restock tab below to order more.
+</div>
+{% endif %}
+
+<!-- Tabs -->
+<div class="tabs" style="margin-bottom:20px;">
+  <div class="tab active" id="tab-dropship" onclick="switchTab('dropship')">Drop-Ship Order</div>
+  <div class="tab" id="tab-restock" onclick="switchTab('restock')">Bulk Restock (20% off)</div>
+  <div class="tab" id="tab-history" onclick="switchTab('history')">Order History</div>
+</div>
+
+<!-- Drop-Ship Tab -->
+<div class="tab-content active" id="content-dropship">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;">
+    <div>
+      <div class="section-title">What to Ship</div>
+      {% for slug, info in dealer_kits.items() %}
+      {% set row = inv[slug] %}
+      <div class="kit-selector" id="kit-{{ slug }}">
+        <label>
+          <input type="checkbox" id="chk-{{ slug }}" onchange="toggleKit('{{ slug }}')">
+          {{ info.name }}
+          <span style="font-size:12px;color:{% if row.sets_on_hand == 0 %}#f87171{% elif row.sets_on_hand <= 2 %}#fbbf24{% else %}#4ade80{% endif %};">
+            ({{ row.sets_on_hand }} on hand)
+          </span>
+        </label>
+        <div class="pc-select" id="pc-{{ slug }}">
+          <label style="font-size:12px;color:#94a3b8;">Powder Coat</label>
+          <select class="form-input" id="pcsel-{{ slug }}" onchange="updateTotal()">
+            {% for key, (label, cost) in pc_options.items() %}
+            <option value="{{ key }}" data-cost="{{ cost }}">{{ label }}{% if cost %} (+${{ cost }}){% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <div>
+      <div class="section-title">Ship To</div>
+      <div class="form-group">
+        <label>Customer Name *</label>
+        <input type="text" id="ds-name" class="form-input" placeholder="Full name">
+      </div>
+      <div class="form-group">
+        <label>Address *</label>
+        <input type="text" id="ds-addr" class="form-input" placeholder="123 Main St">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>City *</label>
+          <input type="text" id="ds-city" class="form-input">
+        </div>
+        <div class="form-group">
+          <label>State *</label>
+          <input type="text" id="ds-state" class="form-input" placeholder="MI" maxlength="2" style="text-transform:uppercase;">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>ZIP *</label>
+          <input type="text" id="ds-zip" class="form-input">
+        </div>
+        <div class="form-group">
+          <label>Phone</label>
+          <input type="text" id="ds-phone" class="form-input">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Customer Email</label>
+        <input type="email" id="ds-email" class="form-input">
+      </div>
+      <div class="form-group">
+        <label>Your PO # (optional)</label>
+        <input type="text" id="ds-poref" class="form-input" placeholder="e.g. 1965">
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea id="ds-notes" class="form-input" rows="2" placeholder="Any special instructions..."></textarea>
+      </div>
+
+      <div id="ds-total" class="price-breakdown" style="display:none;margin-bottom:16px;"></div>
+      <div id="ds-err" style="display:none;color:#f87171;font-size:13px;margin-bottom:10px;"></div>
+      <button class="btn btn-primary" style="width:100%;" onclick="submitDropship()">Submit Drop-Ship Order</button>
+      <p style="font-size:11px;color:#4b5563;margin-top:8px;text-align:center;">
+        Shipping cost + ${{ shipping_markup | int }} handling will be added when shipped. Payment via PayPal.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- Restock Tab -->
+<div class="tab-content" id="content-restock">
+  <div class="restock-note">
+    Bulk discount requires <strong>minimum 5 sets of each</strong> (both intake and charge pipes). Payment via PayPal to info@ecopowerparts.com.
+  </div>
+  <div style="max-width:420px;">
+    <div class="form-row" style="margin-bottom:16px;">
+      <div class="form-group">
+        <label>Fusion Intake Sets (min 5)</label>
+        <input type="number" id="rs-intake" class="form-input" min="5" value="5" oninput="updateRestockTotal()">
+      </div>
+      <div class="form-group">
+        <label>Fusion Charge Sets (min 5)</label>
+        <input type="number" id="rs-charge" class="form-input" min="5" value="5" oninput="updateRestockTotal()">
+      </div>
+    </div>
+    <div id="rs-total" class="price-breakdown" style="margin-bottom:16px;"></div>
+    <div class="form-group">
+      <label>Notes</label>
+      <textarea id="rs-notes" class="form-input" rows="2"></textarea>
+    </div>
+    <div id="rs-err" style="display:none;color:#f87171;font-size:13px;margin-bottom:10px;"></div>
+    <button class="btn btn-success" style="width:100%;" onclick="submitRestock()">Request Restock Invoice</button>
+    <p style="font-size:11px;color:#4b5563;margin-top:8px;text-align:center;">
+      We'll send you a PayPal invoice. Inventory will be added once payment is confirmed.
+    </p>
+  </div>
+</div>
+
+<!-- History Tab -->
+<div class="tab-content" id="content-history">
+  <div class="card" style="padding:0;overflow:hidden;">
+    <table>
+      <thead><tr>
+        <th>#</th><th>Type</th><th>Status</th><th>Details</th><th>Owed / Total</th><th>Date</th>
+      </tr></thead>
+      <tbody>
+      {% for o in orders %}
+      <tr class="order-row-{{ o.status }}">
+        <td style="color:#94a3b8;font-weight:600;">{{ o.id }}</td>
+        <td>{% if o.order_type == 'dropship' %}Drop-Ship{% else %}Restock{% endif %}</td>
+        <td><span class="status-badge status-{{ o.status }}">{{ o.status }}</span></td>
+        <td style="font-size:12px;">
+          {% if o.order_type == 'dropship' %}
+            {% set items = o.items_json | from_json %}
+            {{ items | map(attribute='kit_name') | join(', ') if items else '—' }}<br>
+            <span style="color:#64748b;">→ {{ o.ship_to_name }}, {{ o.ship_to_city }}</span>
+            {% if o.tracking_number %}<br><span style="color:#4fc3f7;">🚚 {{ o.tracking_number }}</span>{% endif %}
+          {% else %}
+            {{ o.intake_qty }} intake + {{ o.charge_qty }} charge
+          {% endif %}
+        </td>
+        <td style="font-size:13px;font-weight:600;color:{% if o.total_owed or o.restock_total %}#fbbf24{% else %}#4b5563{% endif %};">
+          {% if o.order_type == 'dropship' and o.total_owed %}${{ '%.2f' % o.total_owed }}
+          {% elif o.order_type == 'restock' %}${{ '%.2f' % o.restock_total }}
+          {% else %}TBD{% endif %}
+        </td>
+        <td style="font-size:12px;color:#64748b;">{{ o.created_at.strftime('%b %d, %Y') }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" style="text-align:center;color:#4b5563;padding:24px;">No orders yet.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const DEALER_KITS = {{ dealer_kits | tojson }};
+const PC_OPTIONS = {{ pc_options | tojson }};
+
+{% if is_admin %}
+function adminSetInv(dealerId, slug) {
+  const qty = parseInt(document.getElementById('inv-' + slug).value);
+  fetch('/api/dealer/inventory/set', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({dealer_id: dealerId, kit_slug: slug, qty: qty})
+  }).then(r=>r.json()).then(d=>{
+    if (d.ok) location.reload();
+    else alert(d.error);
+  });
+}
+
+let _shipPcCost = 0;
+function showShipModal(orderId, pcCost) {
+  _shipPcCost = pcCost;
+  document.getElementById('shipOrderId').value = orderId;
+  document.getElementById('shipTracking').value = '';
+  document.getElementById('shipCost').value = '';
+  document.getElementById('shipBreakdown').innerHTML = '';
+  document.getElementById('shipModal').style.display = 'flex';
+  document.getElementById('shipCost').addEventListener('input', updateShipBreakdown);
+}
+function updateShipBreakdown() {
+  const sc = parseFloat(document.getElementById('shipCost').value) || 0;
+  const total = _shipPcCost + sc + 15;
+  document.getElementById('shipBreakdown').innerHTML =
+    `<div class="price-breakdown">
+      <div class="price-row"><span>Powder coat</span><span>$${_shipPcCost.toFixed(2)}</span></div>
+      <div class="price-row"><span>Shipping</span><span>$${sc.toFixed(2)}</span></div>
+      <div class="price-row"><span>Handling</span><span>$15.00</span></div>
+      <div class="price-row total"><span>Total owed by dealer</span><span>$${total.toFixed(2)}</span></div>
+    </div>`;
+}
+function submitShip() {
+  const id = document.getElementById('shipOrderId').value;
+  const tracking = document.getElementById('shipTracking').value.trim();
+  const cost = parseFloat(document.getElementById('shipCost').value) || 0;
+  if (!tracking) { alert('Enter tracking number'); return; }
+  fetch(`/api/dealer/order/${id}/ship`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({tracking, shipping_cost: cost})
+  }).then(r=>r.json()).then(d=>{
+    if (d.ok) location.reload();
+    else alert(d.error);
+  });
+}
+function confirmRestock(id) {
+  if (!confirm('Confirm payment received and add to dealer inventory?')) return;
+  fetch(`/api/dealer/order/${id}/confirm-restock`, {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'
+  }).then(r=>r.json()).then(d=>{
+    if (d.ok) location.reload();
+    else alert(d.error);
+  });
+}
+document.getElementById('shipModal').addEventListener('click', function(e){
+  if (e.target === this) this.style.display='none';
+});
+
+{% else %}
+// Dealer JS
+function switchTab(name) {
+  ['dropship','restock','history'].forEach(t=>{
+    document.getElementById('tab-'+t).classList.toggle('active', t===name);
+    document.getElementById('content-'+t).classList.toggle('active', t===name);
+  });
+}
+function toggleKit(slug) {
+  const chk = document.getElementById('chk-'+slug);
+  const pc = document.getElementById('pc-'+slug);
+  pc.style.display = chk.checked ? 'block' : 'none';
+  updateTotal();
+}
+function updateTotal() {
+  const items = getItems();
+  const el = document.getElementById('ds-total');
+  if (!items.length) { el.style.display='none'; return; }
+  let rows = items.map(i=>`<div class="price-row"><span>${DEALER_KITS[i.kit_slug].name} (${PC_OPTIONS[i.powder_coat][0]})</span><span>$${i.pc_cost.toFixed(2)}</span></div>`).join('');
+  let pcTotal = items.reduce((s,i)=>s+i.pc_cost,0);
+  el.innerHTML = rows +
+    `<div class="price-row"><span>Shipping + $15 handling</span><span>TBD</span></div>` +
+    `<div class="price-row total"><span>PC total (+ shipping when shipped)</span><span>$${pcTotal.toFixed(2)}+</span></div>`;
+  el.style.display = 'block';
+}
+function getItems() {
+  const items = [];
+  Object.keys(DEALER_KITS).forEach(slug=>{
+    const chk = document.getElementById('chk-'+slug);
+    if (chk && chk.checked) {
+      const pcSel = document.getElementById('pcsel-'+slug);
+      const pcKey = pcSel ? pcSel.value : 'raw';
+      const pcCost = pcSel ? parseInt(pcSel.selectedOptions[0].dataset.cost || 0) : 0;
+      items.push({kit_slug: slug, powder_coat: pcKey, pc_cost: pcCost});
+    }
+  });
+  return items;
+}
+function submitDropship() {
+  const err = document.getElementById('ds-err');
+  err.style.display='none';
+  const items = getItems();
+  if (!items.length) { err.textContent='Select at least one item.'; err.style.display='block'; return; }
+  const ship = {
+    name: document.getElementById('ds-name').value.trim(),
+    address1: document.getElementById('ds-addr').value.trim(),
+    city: document.getElementById('ds-city').value.trim(),
+    state: document.getElementById('ds-state').value.trim().toUpperCase(),
+    zip: document.getElementById('ds-zip').value.trim(),
+    email: document.getElementById('ds-email').value.trim(),
+    phone: document.getElementById('ds-phone').value.trim(),
+  };
+  if (!ship.name || !ship.address1 || !ship.city || !ship.zip) {
+    err.textContent='Name, address, city, and ZIP are required.'; err.style.display='block'; return;
+  }
+  fetch('/api/dealer/dropship', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({items, ship_to: ship,
+      po_ref: document.getElementById('ds-poref').value.trim(),
+      notes: document.getElementById('ds-notes').value.trim()})
+  }).then(r=>r.json()).then(d=>{
+    if (d.ok) {
+      alert(`Order #${d.order_id} submitted! We'll notify you when it ships.`);
+      location.reload();
+    } else { err.textContent=d.error||'Error'; err.style.display='block'; }
+  });
+}
+
+// Restock
+function updateRestockTotal() {
+  const intakeQ = parseInt(document.getElementById('rs-intake').value) || 0;
+  const chargeQ = parseInt(document.getElementById('rs-charge').value) || 0;
+  const intakePrice = DEALER_KITS['fusion_intake'].retail;
+  const chargePrice = DEALER_KITS['fusion_charge'].retail;
+  const sub = intakeQ * intakePrice + chargeQ * chargePrice;
+  const disc = sub * 0.20;
+  const total = sub - disc;
+  document.getElementById('rs-total').innerHTML =
+    `<div class="price-row"><span>Fusion Intake × ${intakeQ}</span><span>$${(intakeQ*intakePrice).toFixed(2)}</span></div>` +
+    `<div class="price-row"><span>Fusion Charge × ${chargeQ}</span><span>$${(chargeQ*chargePrice).toFixed(2)}</span></div>` +
+    `<div class="price-row"><span>20% dealer discount</span><span style="color:#4ade80;">-$${disc.toFixed(2)}</span></div>` +
+    `<div class="price-row total"><span>Total due via PayPal</span><span>$${total.toFixed(2)}</span></div>`;
+}
+updateRestockTotal();
+
+function submitRestock() {
+  const err = document.getElementById('rs-err');
+  err.style.display='none';
+  const intakeQ = parseInt(document.getElementById('rs-intake').value) || 0;
+  const chargeQ = parseInt(document.getElementById('rs-charge').value) || 0;
+  if (intakeQ < 5 || chargeQ < 5) {
+    err.textContent='Minimum 5 sets of each required.'; err.style.display='block'; return;
+  }
+  fetch('/api/dealer/restock', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({intake_qty: intakeQ, charge_qty: chargeQ,
+                          notes: document.getElementById('rs-notes').value.trim()})
+  }).then(r=>r.json()).then(d=>{
+    if (d.ok) { alert(`Restock request #${d.order_id} submitted! Total: $${d.total.toFixed(2)}. We'll send a PayPal invoice.`); location.reload(); }
+    else { err.textContent=d.error||'Error'; err.style.display='block'; }
+  });
+}
+{% endif %}
+</script>
+{% endblock %}

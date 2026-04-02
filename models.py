@@ -198,3 +198,53 @@ class ShopifyOrder(db.Model):
     line_items_json = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     processed_at = db.Column(db.DateTime)
+
+
+class DealerInventory(db.Model):
+    """Tracks how many sets of each product a dealer has on hand (pre-purchased)."""
+    __tablename__ = 'dealer_inventory'
+    id = db.Column(db.Integer, primary_key=True)
+    dealer_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    kit_slug = db.Column(db.String(50), nullable=False)   # 'fusion_intake' or 'fusion_charge'
+    kit_name = db.Column(db.String(120), nullable=False)
+    sets_on_hand = db.Column(db.Integer, default=0)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    dealer = db.relationship('User')
+
+
+class DealerOrder(db.Model):
+    """Drop-ship or restock orders placed by/for a dealer."""
+    __tablename__ = 'dealer_orders'
+    id = db.Column(db.Integer, primary_key=True)
+    dealer_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    order_type = db.Column(db.String(20), nullable=False)   # 'dropship' or 'restock'
+    status = db.Column(db.String(20), default='pending')    # pending, shipped, complete, cancelled
+    po_ref = db.Column(db.String(30))                       # dealer's own PO number
+    # Drop-ship: ship-to address
+    ship_to_name = db.Column(db.String(120))
+    ship_to_address1 = db.Column(db.String(200))
+    ship_to_city = db.Column(db.String(60))
+    ship_to_state = db.Column(db.String(30))
+    ship_to_zip = db.Column(db.String(20))
+    ship_to_email = db.Column(db.String(120))
+    ship_to_phone = db.Column(db.String(30))
+    # Items JSON: [{"kit_slug": "fusion_intake", "kit_name": "...", "qty": 1, "powder_coat": "gloss_black", "pc_cost": 100}]
+    items_json = db.Column(db.Text, default='[]')
+    # Charges (drop-ship)
+    pc_cost = db.Column(db.Float, default=0)
+    shipping_cost = db.Column(db.Float, default=0)   # actual ShipStation cost (filled by admin when shipping)
+    shipping_markup = db.Column(db.Float, default=15)
+    total_owed = db.Column(db.Float, default=0)
+    # Restock quantities & pricing
+    intake_qty = db.Column(db.Integer, default=0)
+    charge_qty = db.Column(db.Integer, default=0)
+    discount_pct = db.Column(db.Float, default=20)
+    restock_total = db.Column(db.Float, default=0)
+    # Fulfillment
+    tracking_number = db.Column(db.String(200))
+    notes = db.Column(db.Text, default='')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    shipped_at = db.Column(db.DateTime)
+
+    dealer = db.relationship('User')
