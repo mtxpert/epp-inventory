@@ -1,4 +1,5 @@
 """ShipStation v2 API — auto label purchase, Josh notification, Shopify fulfillment."""
+import time
 import requests
 from datetime import datetime, timezone
 from flask import current_app
@@ -350,6 +351,7 @@ def fulfill_shopify_order(shopify_order_id, tracking_numbers, carrier_code):
     if not open_fos:
         return {"error": "no open fulfillment orders"}
 
+    time.sleep(0.6)  # stay under Shopify's 2 calls/sec limit
     # Create fulfillment with first tracking number (REST API)
     payload = {
         "fulfillment": {
@@ -369,6 +371,7 @@ def fulfill_shopify_order(shopify_order_id, tracking_numbers, carrier_code):
     result = r.json()
 
     # If multiple tracking numbers, update via GraphQL to attach all as separate lines
+    time.sleep(0.6)  # stay under Shopify's 2 calls/sec limit
     if len(tracking_list) > 1:
         fulfillment_id = (result.get("fulfillment") or {}).get("id")
         if fulfillment_id:
