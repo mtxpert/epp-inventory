@@ -103,9 +103,14 @@ def _kit_shipping_config(kit_name, qty=1):
         return WH_TEMPE, CARRIER_USPS, "usps_priority_mail", [
             {"package_code": pkg, "weight": {"value": weight, "unit": "pound"}}
         ]
-    if "noisemaker" in name or "nmd" in name:
+    if ("noisemaker" in name or "nmd" in name) and "upgrade" not in name:
         return WH_TEMPE, CARRIER_USPS, "usps_priority_mail", [
             {"package_code": PKG_USPS_MEDIUM_FR, "weight": {"value": 3, "unit": "pound"}}
+        ]
+    if ("noisemaker" in name or "nmd" in name) and "upgrade" in name:
+        # NMD upgrade includes full hot pipes — ships UPS like hot pipes
+        return WH_TEMPE, CARRIER_UPS, "ups_ground", [
+            {"package_code": PKG_HOT_PIPES, "weight": {"value": 6, "unit": "pound"}}
         ]
     if "fusion" in name and "charge" in name:
         return WH_TEMPE, CARRIER_UPS, "ups_ground", [
