@@ -444,6 +444,63 @@ def buy_label_and_notify_josh(order_number, kit_name, qty, ship_to, order_total=
     return result
 
 
+def auto_ship_from_order_data(order_data):
+    """
+    Full auto-ship triggered from a raw Shopify order dict (webhook or sync).
+    Buys a label per kit line item, emails Josh/Mike, fulfills Shopify once with all tracking numbers.
+    """
+    from models import Kit
+    order_number = str(order_data.get('order_number', ''))
+    shopify_order_id = str(order_data.get('id', ''))
+    sa = order_data.get('shipping_address') or order_data.get('billing_address') or {}
+    ship_to = {
+        'name': sa.get('name', ''),
+        'address_line1': sa.get('address1', ''),
+        'address_line2': sa.get('address2', '') or '',
+        'city_locality': sa.get('city', ''),
+        'state_province': sa.get('province_code', sa.get('province', '')),
+        'postal_code': sa.get('zip', ''),
+        'country_code': sa.get('country_code', 'US'),
+        'phone': sa.get('phone', '') or '4805550000',
+    }
+    order_total = float(order_data.get('total_price', 0) or 0)
+    all_line_items = order_data.get('line_items', [])
+
+    label_results = []
+    for item in all_line_items:
+        product_id = str(item.get('product_id', ''))
+        qty = item.get('quantity', 1)
+        variant_title = (item.get('variant_title') or '').lower()
+        kits = Kit.query.filter_by(shopify_id=product_id).all()
+        if not kits:
+            continue
+        matched_kit = kits[0]
+        if len(kits) > 1:
+            for k in kits:
+                if k.shopify_variant and k.shopify_variant.lower() in variant_title:
+                    matched_kit = k
+                    break
+        r = buy_label_and_notify_josh(order_number, matched_kit.name, qty, ship_to,
+                                      order_total=order_total, line_items=all_line_items)
+        label_results.append(r)
+        if r.get('error'):
+            current_app.logger.error(f"Label error for {matched_kit.name} on #{order_number}: {r['error']}")
+
+    trackings = [r['tracking_number'] for r in label_results if r.get('tracking_number')]
+    carrier = next((r.get('carrier', '') for r in label_results if r.get('carrier')), '')
+    if trackings:
+        try:
+            fulfill_shopify_order(shopify_order_id, trackings, carrier)
+        except Exception as e:
+            current_app.logger.error(f"Shopify fulfillment error for #{order_number}: {e}")
+        try:
+            mark_shipped_v1(order_number, ', '.join(trackings), carrier)
+        except Exception as e:
+            current_app.logger.error(f"ShipStation markasshipped error for #{order_number}: {e}")
+
+    return label_results
+
+
 def auto_ship_order(order_number, shopify_order_id, kit_name, qty, ship_to, order_total=0, line_items=None):
     """
     Full auto-ship for a single-kit order: buy label → email Josh → fulfill Shopify.

@@ -1598,7 +1598,8 @@ def register_routes(app):
         # Auto-ship: buy label, email Josh, fulfill Shopify
         if result.get('status') not in ('already_processed',) and result.get('deductions'):
             try:
-                _auto_ship_from_order(order_data, result)
+                from shipstation import auto_ship_from_order_data
+                auto_ship_from_order_data(order_data)
             except Exception as e:
                 current_app.logger.error(f"Auto-ship error: {e}")
 

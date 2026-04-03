@@ -187,6 +187,13 @@ def sync_recent_orders(hours=6):
             try:
                 result = process_order(order)
                 results.append(result)
+                # Auto-ship newly processed orders (same as webhook path)
+                if result.get('status') == 'processed' and result.get('deductions'):
+                    try:
+                        from shipstation import auto_ship_from_order_data
+                        auto_ship_from_order_data(order)
+                    except Exception as ship_err:
+                        current_app.logger.error(f"Auto-ship error for #{result.get('order')}: {ship_err}")
             except Exception as e:
                 order_num = order.get('order_number') or order.get('name', '?')
                 current_app.logger.error(f"Error processing order #{order_num}: {e}")
