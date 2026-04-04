@@ -118,9 +118,9 @@ def _kit_shipping_config(kit_name, qty=1):
             {"package_code": PKG_FUSION_CHARGE, "weight": {"value": 6, "unit": "pound"}}
         ]
     if "intake" in name and "filter" not in name:
-        # Intake kit ships as one box — filter included inside the intake pipes box
+        # Intake kit fits in hot-pipes box (24×13×7)
         return WH_TEMPE, CARRIER_UPS, "ups_ground", [
-            {"package_code": PKG_INTAKE_PIPES, "weight": {"value": 8, "unit": "pound"}},
+            {"package_code": PKG_HOT_PIPES, "weight": {"value": 6, "unit": "pound"}},
         ]
     if "filter" in name:
         return WH_TEMPE, CARRIER_UPS, "ups_ground", [
