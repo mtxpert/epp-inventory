@@ -117,10 +117,15 @@ def _kit_shipping_config(kit_name, qty=1):
         return WH_TEMPE, CARRIER_UPS, "ups_ground", [
             {"package_code": PKG_FUSION_CHARGE, "weight": {"value": 6, "unit": "pound"}}
         ]
-    if "intake" in name and "filter" not in name:
-        # Intake kit fits in hot-pipes box (24×13×7)
+    if "fusion" in name and "intake" in name:
+        # Fusion intake fits in hot-pipes box (24×13×7)
         return WH_TEMPE, CARRIER_UPS, "ups_ground", [
             {"package_code": PKG_HOT_PIPES, "weight": {"value": 6, "unit": "pound"}},
+        ]
+    if "intake" in name and "filter" not in name:
+        # SHO/Explorer intake ships in intake-pipes box (24×15×11)
+        return WH_TEMPE, CARRIER_UPS, "ups_ground", [
+            {"package_code": PKG_INTAKE_PIPES, "weight": {"value": 8, "unit": "pound"}},
         ]
     if "filter" in name:
         return WH_TEMPE, CARRIER_UPS, "ups_ground", [
@@ -318,16 +323,41 @@ def email_label_to_josh(order_number, kit_name, recipient_name, label_data, line
     return tracking
 
 
+def _shopify_gql(store, token, query, variables=None):
+    """Execute a Shopify GraphQL query with exponential backoff on 429.
+    Uses the GraphQL cost-based rate limit bucket (2000pts max, 100pts/sec restore)
+    which is entirely separate from the REST 2-calls/sec limit.
+    """
+    url = f"https://{store}/admin/api/2024-01/graphql.json"
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    for attempt in range(4):
+        r = requests.post(url, json={"query": query, "variables": variables or {}},
+                          headers=headers, timeout=15)
+        if r.status_code == 429:
+            wait = 2 ** attempt
+            current_app.logger.warning(f"Shopify GraphQL 429, retrying in {wait}s (attempt {attempt+1})")
+            time.sleep(wait)
+            continue
+        r.raise_for_status()
+        return r.json()
+    raise Exception("Shopify GraphQL rate limit exceeded after 4 retries")
+
+
 def fulfill_shopify_order(shopify_order_id, tracking_numbers, carrier_code):
-    """Push tracking to Shopify and trigger customer notification email.
-    tracking_numbers: single string or list of tracking numbers.
-    For multiple tracking numbers, creates the fulfillment with the first tracking
-    then updates via GraphQL to attach all numbers as separate lines.
+    """Push tracking to Shopify entirely via GraphQL (2 calls, separate rate limit bucket).
+
+    Previously used 3 REST calls (GET fulfillment_orders + POST fulfillments + GraphQL update).
+    Now uses:
+      1. GraphQL query  — get open fulfillment order GIDs
+      2. GraphQL mutation — fulfillmentCreateV2 with all tracking numbers in one shot
+
+    ROLLBACK: restore from backup-graphql-migration-YYYYMMDD/shipstation.py
     """
     token = current_app.config.get("SHOPIFY_TOKEN", "")
     store = current_app.config.get("SHOPIFY_STORE", "edf236-3.myshopify.com")
     if not token:
         return None
+
     company_map = {"ups": "UPS", "usps": "USPS", "fedex": "FedEx"}
     company = company_map.get((carrier_code or "").lower(), (carrier_code or "").upper())
 
@@ -339,82 +369,74 @@ def fulfill_shopify_order(shopify_order_id, tracking_numbers, carrier_code):
     if not tracking_list:
         return {"error": "no tracking numbers provided"}
 
-    # Get open fulfillment order IDs
-    fo_r = requests.get(
-        f"https://{store}/admin/api/2024-01/orders/{shopify_order_id}/fulfillment_orders.json",
-        headers={"X-Shopify-Access-Token": token},
-        timeout=15
-    )
-    fo_r.raise_for_status()
-    fulfillment_orders = fo_r.json().get("fulfillment_orders", [])
-    open_fos = [fo["id"] for fo in fulfillment_orders if fo["status"] == "open"]
-    if not open_fos:
+    ups_base = "https://www.ups.com/WebTracking?trackNums="
+    usps_base = "https://tools.usps.com/go/TrackConfirmAction?tLabels="
+    url_base = ups_base if company == "UPS" else usps_base
+
+    # Step 1: Get open fulfillment order GIDs
+    fo_query = """
+    query GetFulfillmentOrders($orderId: ID!) {
+      order(id: $orderId) {
+        fulfillmentOrders(first: 10) {
+          edges { node { id status } }
+        }
+      }
+    }
+    """
+    fo_data = _shopify_gql(store, token, fo_query,
+                           {"orderId": f"gid://shopify/Order/{shopify_order_id}"})
+    edges = (fo_data.get("data", {})
+                    .get("order", {})
+                    .get("fulfillmentOrders", {})
+                    .get("edges", []))
+    open_fo_ids = [e["node"]["id"] for e in edges if e["node"]["status"] == "OPEN"]
+
+    if not open_fo_ids:
+        current_app.logger.warning(f"No open fulfillment orders for Shopify order {shopify_order_id}")
         return {"error": "no open fulfillment orders"}
 
-    time.sleep(0.6)  # stay under Shopify's 2 calls/sec limit
-    # Create fulfillment with first tracking number (REST API)
-    payload = {
+    # Step 2: Create fulfillment with all tracking numbers in one mutation
+    create_mutation = """
+    mutation FulfillmentCreateV2($fulfillment: FulfillmentV2Input!) {
+      fulfillmentCreateV2(fulfillment: $fulfillment) {
+        fulfillment {
+          id
+          status
+          trackingInfo { number url company }
+        }
+        userErrors { field message }
+      }
+    }
+    """
+    variables = {
         "fulfillment": {
-            "notify_customer": True,
-            "tracking_info": {"number": tracking_list[0], "company": company},
-            "line_items_by_fulfillment_order": [
-                {"fulfillment_order_id": fid} for fid in open_fos
-            ],
+            "notifyCustomer": True,
+            "trackingInfo": {
+                "company": company,
+                "numbers": tracking_list,
+                "urls": [f"{url_base}{t}" for t in tracking_list],
+            },
+            "lineItemsByFulfillmentOrder": [
+                {"fulfillmentOrderId": fo_id} for fo_id in open_fo_ids
+            ]
         }
     }
-    r = requests.post(
-        f"https://{store}/admin/api/2024-01/fulfillments.json",
-        json=payload,
-        headers={"X-Shopify-Access-Token": token, "Content-Type": "application/json"},
-        timeout=15
+    result = _shopify_gql(store, token, create_mutation, variables)
+    errors = (result.get("data", {})
+                    .get("fulfillmentCreateV2", {})
+                    .get("userErrors", []))
+    if errors:
+        current_app.logger.error(f"GraphQL fulfillmentCreateV2 errors: {errors}")
+        return {"error": errors}
+
+    fulfillment = (result.get("data", {})
+                        .get("fulfillmentCreateV2", {})
+                        .get("fulfillment", {}))
+    current_app.logger.info(
+        f"Shopify fulfillment created via GraphQL: {fulfillment.get('id')} status={fulfillment.get('status')}"
     )
-    result = r.json()
-
-    # If multiple tracking numbers, update via GraphQL to attach all as separate lines
-    time.sleep(0.6)  # stay under Shopify's 2 calls/sec limit
-    if len(tracking_list) > 1:
-        fulfillment_id = (result.get("fulfillment") or {}).get("id")
-        if fulfillment_id:
-            ups_base = "https://www.ups.com/WebTracking?trackNums="
-            usps_base = "https://tools.usps.com/go/TrackConfirmAction?tLabels="
-            url_base = ups_base if company == "UPS" else usps_base
-            gql_mutation = """
-mutation FulfillmentTrackingInfoUpdate(
-  $fulfillmentId: ID!
-  $trackingInfoInput: FulfillmentTrackingInput!
-) {
-  fulfillmentTrackingInfoUpdate(
-    fulfillmentId: $fulfillmentId
-    trackingInfoInput: $trackingInfoInput
-    notifyCustomer: false
-  ) {
-    fulfillment { id status }
-    userErrors { field message }
-  }
-}
-"""
-            variables = {
-                "fulfillmentId": f"gid://shopify/Fulfillment/{fulfillment_id}",
-                "trackingInfoInput": {
-                    "company": company,
-                    "numbers": tracking_list,
-                    "urls": [f"{url_base}{t}" for t in tracking_list],
-                }
-            }
-            gql_r = requests.post(
-                f"https://{store}/admin/api/2024-01/graphql.json",
-                json={"query": gql_mutation, "variables": variables},
-                headers={"X-Shopify-Access-Token": token, "Content-Type": "application/json"},
-                timeout=15
-            )
-            gql_data = gql_r.json()
-            errors = (gql_data.get("data", {})
-                              .get("fulfillmentTrackingInfoUpdate", {})
-                              .get("userErrors", []))
-            if errors:
-                current_app.logger.error(f"GraphQL tracking update errors: {errors}")
-
-    return result
+    # Return in compatible format (callers check for 'fulfillment' key)
+    return {"fulfillment": fulfillment}
 
 
 def buy_label_and_notify_josh(order_number, kit_name, qty, ship_to, order_total=0, line_items=None):
