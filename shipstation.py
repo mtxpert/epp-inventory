@@ -128,8 +128,10 @@ def _kit_shipping_config(kit_name, qty=1):
             {"package_code": PKG_INTAKE_PIPES, "weight": {"value": 8, "unit": "pound"}},
         ]
     if "filter" in name:
+        # Each filter ships in its own 9x9x9 box — qty boxes for qty filters
         return WH_TEMPE, CARRIER_UPS, "ups_ground", [
             {"package_code": PKG_FILTER, "weight": {"value": 2, "unit": "pound"}}
+            for _ in range(max(1, qty))
         ]
     # Default: hot pipes box (SHO, Explorer, Fusion Intake, all other pipe kits)
     return WH_TEMPE, CARRIER_UPS, "ups_ground", [
@@ -323,35 +325,31 @@ def email_label_to_josh(order_number, kit_name, recipient_name, label_data, line
     return tracking
 
 
-def _shopify_gql(store, token, query, variables=None):
-    """Execute a Shopify GraphQL query with exponential backoff on 429.
-    Uses the GraphQL cost-based rate limit bucket (2000pts max, 100pts/sec restore)
-    which is entirely separate from the REST 2-calls/sec limit.
-    """
-    url = f"https://{store}/admin/api/2024-01/graphql.json"
-    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+def _shopify_request(method, url, headers, timeout=15, **kwargs):
+    """HTTP request to Shopify with exponential backoff on 429 (up to 4 retries: 1,2,4,8s)."""
     for attempt in range(4):
-        r = requests.post(url, json={"query": query, "variables": variables or {}},
-                          headers=headers, timeout=15)
+        r = requests.request(method, url, headers=headers, timeout=timeout, **kwargs)
         if r.status_code == 429:
             wait = 2 ** attempt
-            current_app.logger.warning(f"Shopify GraphQL 429, retrying in {wait}s (attempt {attempt+1})")
+            current_app.logger.warning(f"Shopify 429, retrying in {wait}s (attempt {attempt+1})")
             time.sleep(wait)
             continue
         r.raise_for_status()
-        return r.json()
-    raise Exception("Shopify GraphQL rate limit exceeded after 4 retries")
+        return r
+    raise Exception(f"Shopify rate limit exceeded after 4 retries: {url}")
+
+
+def _shopify_gql(store, token, query, variables=None):
+    """Execute a Shopify GraphQL query. Uses separate cost-based rate limit bucket."""
+    url = f"https://{store}/admin/api/2024-01/graphql.json"
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    return _shopify_request("POST", url, headers,
+                            json={"query": query, "variables": variables or {}}).json()
 
 
 def fulfill_shopify_order(shopify_order_id, tracking_numbers, carrier_code):
-    """Push tracking to Shopify entirely via GraphQL (2 calls, separate rate limit bucket).
-
-    Previously used 3 REST calls (GET fulfillment_orders + POST fulfillments + GraphQL update).
-    Now uses:
-      1. GraphQL query  — get open fulfillment order GIDs
-      2. GraphQL mutation — fulfillmentCreateV2 with all tracking numbers in one shot
-
-    ROLLBACK: restore from backup-graphql-migration-YYYYMMDD/shipstation.py
+    """Mark a Shopify order as fulfilled via GraphQL fulfillmentCreateV2.
+    Accepts a single tracking number or list/comma-separated string.
     """
     token = current_app.config.get("SHOPIFY_TOKEN", "")
     store = current_app.config.get("SHOPIFY_STORE", "edf236-3.myshopify.com")
@@ -496,12 +494,19 @@ def auto_ship_from_order_data(order_data):
     order_total = float(order_data.get('total_price', 0) or 0)
     all_line_items = order_data.get('line_items', [])
 
+    # Batch kit lookup — one query for all product IDs in the order
+    product_ids = [str(item.get('product_id', '')) for item in all_line_items]
+    all_kits = Kit.query.filter(Kit.shopify_id.in_(product_ids)).all()
+    kits_by_product = {}
+    for k in all_kits:
+        kits_by_product.setdefault(k.shopify_id, []).append(k)
+
     label_results = []
     for item in all_line_items:
         product_id = str(item.get('product_id', ''))
         qty = item.get('quantity', 1)
         variant_title = (item.get('variant_title') or '').lower()
-        kits = Kit.query.filter_by(shopify_id=product_id).all()
+        kits = kits_by_product.get(product_id, [])
         if not kits:
             continue
         matched_kit = kits[0]

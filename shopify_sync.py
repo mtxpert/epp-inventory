@@ -3,7 +3,6 @@ import hashlib
 import hmac
 import base64
 import json
-import time
 import requests
 from datetime import datetime, timezone, timedelta
 from flask import current_app
@@ -157,16 +156,13 @@ def get_low_stock_components():
     return [c for c in components if c.qty <= c.reorder_threshold]
 
 
-def sync_recent_orders(hours=6):
-    """Pull recent UNFULFILLED orders from Shopify and process unprocessed ones.
+def sync_recent_orders(hours=24):
+    """Backstop sync: fetch unfulfilled paid orders and process any missed by webhooks.
 
-    Scoped to unfulfilled only (fulfillment_status=null) to minimise API call volume.
-    Includes exponential backoff on 429 responses.
-    Runs every 6h (changed from 2h) as a backstop for missed webhooks — webhooks
-    are the primary fulfillment trigger.
-
-    ROLLBACK: restore from backup-graphql-migration-YYYYMMDD/shopify_sync.py
+    Uses a 24h window so orders paid after creation (e.g. delayed payment) aren't missed.
+    Runs every 6h via APScheduler — webhooks are the primary fulfillment trigger.
     """
+    from shipstation import _shopify_request
     token = current_app.config.get('SHOPIFY_TOKEN')
     store = current_app.config.get('SHOPIFY_STORE')
     if not token or not store:
@@ -183,15 +179,7 @@ def sync_recent_orders(hours=6):
     }
 
     try:
-        for attempt in range(4):
-            r = requests.get(url, headers=headers, params=params, timeout=30)
-            if r.status_code == 429:
-                wait = 2 ** attempt
-                current_app.logger.warning(f"Shopify sync 429, retrying in {wait}s")
-                time.sleep(wait)
-                continue
-            r.raise_for_status()
-            break
+        r = _shopify_request("GET", url, headers, params=params, timeout=30)
         if 'application/json' not in r.headers.get('Content-Type', ''):
             return {'error': f'Shopify returned non-JSON ({r.status_code}). Check SHOPIFY_TOKEN env var.'}
         orders = r.json().get('orders', [])

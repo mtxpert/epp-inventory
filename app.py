@@ -67,7 +67,7 @@ def create_app():
             'id': 'sync_orders',
             'func': 'app:scheduled_sync',
             'trigger': 'interval',
-            'hours': 6,  # backstop for missed webhooks — GraphQL fulfillment is primary path
+            'hours': 6,
             'misfire_grace_time': 900
         },
         {
