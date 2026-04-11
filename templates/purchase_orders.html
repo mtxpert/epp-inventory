@@ -174,7 +174,7 @@
         </thead>
         <tbody>
             {% for po in purchase_orders %}
-            <tr>
+            <tr id="po-row-{{ po.id }}">
                 <td><strong>{{ po.po_number }}</strong></td>
                 <td>{{ po.supplier.name }}</td>
                 <td>
@@ -197,13 +197,57 @@
                 <td>
                     {% if po.status == 'draft' %}
                     <button class="btn btn-primary btn-sm" onclick="sendPO({{ po.id }})">Email to Supplier</button>
+                    {% if po.supplier.name == 'Silicone Intakes' %}
+                    <button class="btn btn-sm" style="background: #0e7490; color: #fff;" onclick="placeOnlineOrder({{ po.id }})">Place Online Order</button>
+                    {% endif %}
+                    <button class="btn btn-sm" style="background: #166534; color: #86efac;" onclick="toggleReceive({{ po.id }})">Receive Items</button>
                     <button class="btn btn-sm" style="background: #475569; color: #fff;" onclick="cancelPO({{ po.id }})">Cancel</button>
                     {% elif po.status == 'sent' %}
-                    <button class="btn btn-success btn-sm" onclick="receivePO({{ po.id }})">Mark Received</button>
+                    <button class="btn btn-sm" style="background: #166534; color: #86efac;" onclick="toggleReceive({{ po.id }})">Receive Items</button>
                     <button class="btn btn-sm" style="background: #475569; color: #fff;" onclick="cancelPO({{ po.id }})">Cancel</button>
                     {% endif %}
                 </td>
             </tr>
+            <!-- Receive Items panel (hidden by default) -->
+            {% if po.status in ['draft', 'sent'] %}
+            <tr id="receive-panel-{{ po.id }}" style="display: none;">
+                <td colspan="6" style="padding: 0;">
+                    <div style="background: #0f172a; border: 1px solid #166534; border-radius: 8px; padding: 16px; margin: 4px 0 8px;">
+                        <h3 style="font-size: 14px; color: #86efac; margin-bottom: 12px;">Receive Items — {{ po.po_number }} ({{ po.supplier.name }})</h3>
+                        <table style="width: auto; margin-bottom: 12px;">
+                            <thead>
+                                <tr>
+                                    <th style="font-size: 12px; padding: 6px 12px;">Part #</th>
+                                    <th style="font-size: 12px; padding: 6px 12px;">Description</th>
+                                    <th style="font-size: 12px; padding: 6px 12px; text-align: center;">Ordered</th>
+                                    <th style="font-size: 12px; padding: 6px 12px; text-align: center;">Qty Received</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for line in po.lines %}
+                                <tr>
+                                    <td style="padding: 6px 12px;"><strong>{{ line.component.part_number }}</strong></td>
+                                    <td style="padding: 6px 12px; color: #94a3b8; font-size: 13px;">{{ line.component.name }}</td>
+                                    <td style="padding: 6px 12px; text-align: center; color: #94a3b8;">{{ line.qty }}</td>
+                                    <td style="padding: 6px 12px; text-align: center;">
+                                        <input type="number" id="recv-{{ po.id }}-{{ line.id }}"
+                                            value="{{ line.qty }}" min="0" max="{{ line.qty }}"
+                                            data-line-id="{{ line.id }}"
+                                            style="width: 70px; padding: 4px 8px; background: #1f2937; border: 1px solid #374151; border-radius: 4px; color: #e0e0e0; font-size: 13px; text-align: center;">
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <button class="btn btn-sm" style="background: #166534; color: #86efac;" onclick="confirmReceive({{ po.id }})">Confirm Receipt</button>
+                            <button class="btn btn-sm" style="background: #374151; color: #94a3b8;" onclick="toggleReceive({{ po.id }})">Cancel</button>
+                            <span id="recv-status-{{ po.id }}" style="font-size: 13px;"></span>
+                        </div>
+                    </div>
+                </td>
+            </tr>
+            {% endif %}
             {% endfor %}
         </tbody>
     </table>
@@ -306,12 +350,49 @@ async function sendPO(poId) {
     } else alert('Failed: ' + data.error);
 }
 
-async function receivePO(poId) {
-    if (!confirm('Mark as received? This will add quantities to inventory.')) return;
-    const res = await fetch(`/api/po/${poId}/receive`, {method: 'POST'});
+function toggleReceive(poId) {
+    const panel = document.getElementById(`receive-panel-${poId}`);
+    panel.style.display = panel.style.display === 'none' ? '' : 'none';
+}
+
+async function confirmReceive(poId) {
+    const lines = [];
+    document.querySelectorAll(`[id^="recv-${poId}-"]`).forEach(input => {
+        const qty = parseInt(input.value) || 0;
+        if (qty > 0) lines.push({line_id: parseInt(input.dataset.lineId), qty: qty});
+    });
+    if (!lines.length) { document.getElementById(`recv-status-${poId}`).textContent = 'No quantities entered'; return; }
+    const statusEl = document.getElementById(`recv-status-${poId}`);
+    statusEl.textContent = 'Saving...'; statusEl.style.color = '#94a3b8';
+    const res = await fetch(`/api/po/${poId}/receive`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({lines})
+    });
     const data = await res.json();
-    if (data.ok) { alert('PO received — inventory updated'); location.reload(); }
-    else alert('Failed: ' + (data.error || 'Unknown error'));
+    if (data.ok) {
+        statusEl.textContent = `Received ${data.total_received} items — inventory updated`;
+        statusEl.style.color = '#4ade80';
+        setTimeout(() => location.reload(), 1200);
+    } else {
+        statusEl.textContent = 'Failed: ' + (data.error || 'Unknown error');
+        statusEl.style.color = '#f87171';
+    }
+}
+
+async function placeOnlineOrder(poId) {
+    if (!confirm('This will log in to siliconeintakes.com and add all clamps to the cart. Continue?')) return;
+    const btn = event.target;
+    btn.textContent = 'Adding to cart...'; btn.disabled = true;
+    const res = await fetch(`/api/po/${poId}/place-online`, {method: 'POST'});
+    const data = await res.json();
+    btn.textContent = 'Place Online Order'; btn.disabled = false;
+    if (data.ok) {
+        const added = data.added.map(a => `${a.part} x${a.qty}`).join(', ');
+        alert(`Cart loaded: ${added}\n\nOpening checkout in a new tab.`);
+        window.open(data.cart_url, '_blank');
+    } else {
+        alert('Failed: ' + data.error);
+    }
 }
 
 async function cancelPO(poId) {

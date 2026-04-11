@@ -1290,18 +1290,25 @@ def register_routes(app):
     @login_required
     def receive_po(po_id):
         po = PurchaseOrder.query.get_or_404(po_id)
-        po.status = 'received'
-        po.received_at = datetime.now(timezone.utc)
-        # Add received quantities to inventory
+        data = request.get_json() or {}
+        # per-line quantities: {"lines": [{"line_id": N, "qty": X}, ...]}
+        line_qtys = {item['line_id']: int(item['qty']) for item in data.get('lines', [])} if data.get('lines') else None
+        total_received = 0
         for line in po.lines:
-            line.component.qty += line.qty
+            qty = line_qtys[line.id] if line_qtys and line.id in line_qtys else line.qty
+            if qty <= 0:
+                continue
+            line.component.qty += qty
+            total_received += qty
             log = InventoryLog(
-                component_id=line.component_id, qty_change=line.qty,
+                component_id=line.component_id, qty_change=qty,
                 reason=f"PO {po.po_number} received", user_id=current_user.id
             )
             db.session.add(log)
+        po.status = 'received'
+        po.received_at = datetime.now(timezone.utc)
         db.session.commit()
-        return jsonify({'ok': True})
+        return jsonify({'ok': True, 'total_received': total_received})
 
     @app.route('/api/po/<int:po_id>/cancel', methods=['POST'])
     @login_required
