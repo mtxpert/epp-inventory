@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Reorder Approval — EPP Inventory{% endblock %}
+{% block content %}
+
+<div style="max-width: 680px; margin: 40px auto;">
+
+{% if expired %}
+<div style="background: #1c1917; border: 1px solid #78350f; border-radius: 12px; padding: 32px; text-align: center;">
+    <div style="font-size: 48px; margin-bottom: 12px;">⏰</div>
+    <h1 style="font-size: 20px; color: #fbbf24; margin-bottom: 8px;">Approval Link Expired</h1>
+    <p style="color: #94a3b8; font-size: 14px;">This reorder approval link expired after 48 hours. If you still need to reorder, go to the <a href="/purchase-orders" style="color: #4fc3f7;">Purchase Orders</a> page and create a new PO manually.</p>
+</div>
+
+{% elif already_acted %}
+<div style="background: #0f172a; border: 1px solid #334155; border-radius: 12px; padding: 32px; text-align: center;">
+    <div style="font-size: 48px; margin-bottom: 12px;">
+        {% if ra.status == 'approved' %}✅{% elif ra.status == 'denied' %}🚫{% else %}❓{% endif %}
+    </div>
+    <h1 style="font-size: 20px; color: #e0e0e0; margin-bottom: 8px;">
+        {% if ra.status == 'approved' %}Reorder Already Approved{% elif ra.status == 'denied' %}Reorder Denied{% else %}Already Processed{% endif %}
+    </h1>
+    <p style="color: #94a3b8; font-size: 14px;">
+        This approval was already acted on{% if ra.acted_at %} on {{ ra.acted_at.strftime('%Y-%m-%d at %H:%M UTC') }}{% endif %}.
+        {% if ra.po_id %}<a href="/purchase-orders" style="color: #4fc3f7;">View purchase orders →</a>{% endif %}
+    </p>
+</div>
+
+{% elif approved %}
+<div style="background: #052e16; border: 1px solid #166534; border-radius: 12px; padding: 32px; text-align: center;">
+    <div style="font-size: 48px; margin-bottom: 12px;">✅</div>
+    <h1 style="font-size: 20px; color: #86efac; margin-bottom: 8px;">Reorder Approved</h1>
+    <p style="color: #94a3b8; font-size: 14px; margin-bottom: 16px;">
+        Purchase orders have been created and emailed to suppliers:
+    </p>
+    <ul style="list-style: none; padding: 0; margin-bottom: 20px;">
+        {% for pn in po_numbers %}
+        <li style="color: #86efac; font-size: 15px; font-weight: bold;">{{ pn }}</li>
+        {% endfor %}
+    </ul>
+    <a href="/purchase-orders" class="btn btn-primary" style="text-decoration: none; padding: 10px 24px;">View Purchase Orders</a>
+</div>
+
+{% elif denied %}
+<div style="background: #1c0a0a; border: 1px solid #7f1d1d; border-radius: 12px; padding: 32px; text-align: center;">
+    <div style="font-size: 48px; margin-bottom: 12px;">🚫</div>
+    <h1 style="font-size: 20px; color: #fca5a5; margin-bottom: 8px;">Reorder Skipped</h1>
+    <p style="color: #94a3b8; font-size: 14px;">No orders have been placed. You can reorder manually at any time from the <a href="/purchase-orders" style="color: #4fc3f7;">Purchase Orders</a> page.</p>
+</div>
+
+{% else %}
+<!-- Pending approval -->
+<div class="card">
+    <h1 style="font-size: 20px; color: #4fc3f7; margin-bottom: 4px;">Auto-Reorder Approval</h1>
+    <p style="color: #64748b; font-size: 13px; margin-bottom: 24px;">
+        The following items have dropped below their reorder threshold. Review and approve to create purchase orders.
+        <br>Link expires {{ ra.expires_at.strftime('%Y-%m-%d at %H:%M UTC') }}.
+    </p>
+
+    <table style="margin-bottom: 24px;">
+        <thead>
+            <tr>
+                <th>Part #</th>
+                <th>Description</th>
+                <th style="text-align: center;">On Hand</th>
+                <th style="text-align: center;">Reorder At</th>
+                <th style="text-align: center;">Order Qty</th>
+                <th style="text-align: right;">Unit Cost</th>
+                <th style="text-align: right;">Line Total</th>
+                <th>Supplier</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in items %}
+            <tr style="{% if item.qty_on_hand <= 0 %}background: rgba(239,68,68,0.07);{% else %}background: rgba(251,191,36,0.04);{% endif %}">
+                <td><strong>{{ item.part_number }}</strong></td>
+                <td style="color: #94a3b8; font-size: 13px;">{{ item.name }}</td>
+                <td style="text-align: center; {% if item.qty_on_hand <= 0 %}color: #f87171;{% else %}color: #fbbf24;{% endif %}">{{ item.qty_on_hand }}</td>
+                <td style="text-align: center; color: #64748b;">{{ item.reorder_threshold }}</td>
+                <td style="text-align: center; color: #e0e0e0; font-weight: bold;">{{ item.qty }}</td>
+                <td style="text-align: right; color: #94a3b8;">${{ "%.2f"|format(item.unit_cost) }}</td>
+                <td style="text-align: right; color: #4ade80;">${{ "%.2f"|format(item.qty * item.unit_cost) }}</td>
+                <td style="color: #64748b; font-size: 12px;">{{ item.supplier_name }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+        <tfoot>
+            <tr>
+                <td colspan="6" style="text-align: right; color: #94a3b8; font-size: 13px; padding-top: 10px;">Estimated Total:</td>
+                <td style="text-align: right; color: #4ade80; font-weight: bold; font-size: 15px; padding-top: 10px;">${{ "%.2f"|format(ra.total_cost) }}</td>
+                <td></td>
+            </tr>
+        </tfoot>
+    </table>
+
+    <div style="display: flex; gap: 16px; align-items: center;">
+        <form method="POST" action="/reorder/approve/{{ ra.token }}/confirm" style="display: inline;">
+            <button type="submit" class="btn btn-primary" style="padding: 12px 32px; font-size: 15px; background: #166534; border-color: #166534;">
+                ✅ Approve &amp; Place Orders
+            </button>
+        </form>
+        <form method="POST" action="/reorder/approve/{{ ra.token }}/deny" style="display: inline;">
+            <button type="submit" class="btn" style="padding: 12px 24px; font-size: 14px; background: #374151; color: #94a3b8;">
+                Skip This Reorder
+            </button>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+</div>
+{% endblock %}

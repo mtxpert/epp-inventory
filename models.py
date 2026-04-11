@@ -181,6 +181,22 @@ class InvoiceLine(db.Model):
         return self.qty * self.unit_cost
 
 
+class ReorderApproval(db.Model):
+    """Pending auto-reorder approval — emailed to admin before order is placed."""
+    __tablename__ = 'reorder_approvals'
+    id = db.Column(db.Integer, primary_key=True)
+    token = db.Column(db.String(64), unique=True, nullable=False)
+    status = db.Column(db.String(20), default='pending')  # pending, approved, denied, expired
+    items_json = db.Column(db.Text, nullable=False)  # JSON: [{part_number, name, qty, unit_cost, supplier_id, supplier_name}]
+    total_cost = db.Column(db.Float, default=0)
+    po_id = db.Column(db.Integer, db.ForeignKey('purchase_orders.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    expires_at = db.Column(db.DateTime, nullable=False)
+    acted_at = db.Column(db.DateTime)
+
+    po = db.relationship('PurchaseOrder')
+
+
 class Turn14OrderLog(db.Model):
     """Tracks every order placed via Turn14 API — used to enforce 60-day access rule."""
     __tablename__ = 'turn14_order_log'

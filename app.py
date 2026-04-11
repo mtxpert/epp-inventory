@@ -12,7 +12,7 @@ from flask_apscheduler import APScheduler
 from models import (db, User, Component, Kit, KitComponent, InventoryLog, ShopifyOrder,
                      Supplier, SupplierComponent, PurchaseOrder, PurchaseOrderLine,
                      InventorySnapshot, Invoice, InvoiceLine, Turn14OrderLog,
-                     DealerInventory, DealerOrder)
+                     DealerInventory, DealerOrder, ReorderApproval)
 
 mail = Mail()
 scheduler = APScheduler()
@@ -145,6 +145,12 @@ def create_app():
         if 'moq' not in sc_cols:
             db.session.execute(db.text("ALTER TABLE supplier_components ADD COLUMN moq INTEGER DEFAULT 0"))
             db.session.commit()
+        # Add po_id column to reorder_approvals if table already exists without it
+        if inspector.has_table('reorder_approvals'):
+            ra_cols = [c['name'] for c in inspector.get_columns('reorder_approvals')]
+            if 'po_id' not in ra_cols:
+                db.session.execute(db.text("ALTER TABLE reorder_approvals ADD COLUMN po_id INTEGER REFERENCES purchase_orders(id)"))
+                db.session.commit()
         # Mark raptor kits as delayed
         for rslug in ['raptor_sw_harness', 'raptor_console_harness']:
             rkit = Kit.query.filter_by(slug=rslug).first()
@@ -338,12 +344,16 @@ def scheduled_sync():
 
 
 def scheduled_stock_alert():
-    """Daily 8AM stock check and email alert."""
-    from shopify_sync import get_low_stock_components, send_low_stock_alert
+    """Daily 8AM stock check — sends approval email for items with suppliers, plain alert otherwise."""
+    from shopify_sync import get_low_stock_components, send_reorder_approval_email, send_low_stock_alert
     with app.app_context():
         low = get_low_stock_components()
         if low:
-            send_low_stock_alert(low)
+            try:
+                send_reorder_approval_email(low)
+            except Exception as e:
+                app.logger.error(f"Approval email failed, falling back: {e}")
+                send_low_stock_alert(low)
             app.logger.info(f"Daily alert: {len(low)} low stock items")
 
 
@@ -1317,6 +1327,117 @@ def register_routes(app):
         po.status = 'cancelled'
         db.session.commit()
         return jsonify({'ok': True})
+
+    # ── Reorder Approval Flow ─────────────────────────────────────────────────
+
+    @app.route('/reorder/approve/<token>', methods=['GET'])
+    def reorder_approve_page(token):
+        """Show approval confirmation page (no login required — token is the auth)."""
+        import secrets as _sec
+        ra = ReorderApproval.query.filter_by(token=token).first_or_404()
+        now = datetime.now(timezone.utc)
+        if ra.status != 'pending':
+            return render_template('reorder_approval.html', ra=ra, expired=False, already_acted=True)
+        if ra.expires_at.replace(tzinfo=timezone.utc) < now:
+            ra.status = 'expired'
+            db.session.commit()
+            return render_template('reorder_approval.html', ra=ra, expired=True, already_acted=False)
+        items = json.loads(ra.items_json)
+        return render_template('reorder_approval.html', ra=ra, items=items, expired=False, already_acted=False)
+
+    @app.route('/reorder/approve/<token>/confirm', methods=['POST'])
+    def reorder_approve_confirm(token):
+        """Create the PO and place the order after approval."""
+        ra = ReorderApproval.query.filter_by(token=token, status='pending').first_or_404()
+        now = datetime.now(timezone.utc)
+        if ra.expires_at.replace(tzinfo=timezone.utc) < now:
+            ra.status = 'expired'
+            db.session.commit()
+            return render_template('reorder_approval.html', ra=ra, expired=True, already_acted=False)
+
+        items = json.loads(ra.items_json)
+        # Group by supplier
+        by_supplier = {}
+        for item in items:
+            sid = item['supplier_id']
+            by_supplier.setdefault(sid, []).append(item)
+
+        created_pos = []
+        for supplier_id, lines in by_supplier.items():
+            supplier = Supplier.query.get(supplier_id)
+            if not supplier:
+                continue
+            # Generate PO number
+            last_po = PurchaseOrder.query.order_by(PurchaseOrder.id.desc()).first()
+            next_num = (last_po.id + 1) if last_po else 1
+            po_number = f"EPP-PO-{next_num:04d}"
+            # Avoid collision
+            while PurchaseOrder.query.filter_by(po_number=po_number).first():
+                next_num += 1
+                po_number = f"EPP-PO-{next_num:04d}"
+            po = PurchaseOrder(
+                po_number=po_number, supplier_id=supplier_id,
+                status='draft', notes='Auto-reorder — approved via email link',
+                created_by=None
+            )
+            db.session.add(po)
+            db.session.flush()
+            for item in lines:
+                comp = Component.query.filter_by(part_number=item['part_number']).first()
+                if comp:
+                    pol = PurchaseOrderLine(po_id=po.id, component_id=comp.id,
+                                           qty=item['qty'], unit_cost=item.get('unit_cost', 0))
+                    db.session.add(pol)
+            created_pos.append(po)
+
+        ra.status = 'approved'
+        ra.acted_at = now
+        if created_pos:
+            ra.po_id = created_pos[0].id
+        db.session.commit()
+
+        # Send PO emails to suppliers
+        po_numbers = []
+        for po in created_pos:
+            try:
+                db.session.refresh(po)
+                from shopify_sync import _smtp_send
+                supplier = po.supplier
+                lines_text = "\n".join(
+                    f"  {l.component.part_number} — {l.component.name} × {l.qty}  @ ${l.unit_cost:.2f}"
+                    for l in po.lines
+                )
+                body = (f"Purchase Order: {po.po_number}\n"
+                        f"From: EcoPowerParts\n"
+                        f"To: {supplier.name}\n\n"
+                        f"Items:\n{lines_text}\n\n"
+                        f"Total: ${po.total:.2f}\n\n"
+                        f"Auto-generated from approved reorder.\n")
+                if supplier.email:
+                    _smtp_send([supplier.email], f"PO {po.po_number} — EcoPowerParts", body)
+                po.status = 'sent'
+                po.sent_at = now
+                po_numbers.append(po.po_number)
+            except Exception as e:
+                current_app.logger.error(f"Failed to email PO {po.po_number}: {e}")
+                po_numbers.append(po.po_number + ' (email failed)')
+        db.session.commit()
+
+        return render_template('reorder_approval.html', ra=ra, items=items,
+                               approved=True, po_numbers=po_numbers,
+                               expired=False, already_acted=False)
+
+    @app.route('/reorder/approve/<token>/deny', methods=['POST'])
+    def reorder_approve_deny(token):
+        """Deny/dismiss the reorder."""
+        ra = ReorderApproval.query.filter_by(token=token, status='pending').first_or_404()
+        ra.status = 'denied'
+        ra.acted_at = datetime.now(timezone.utc)
+        db.session.commit()
+        return render_template('reorder_approval.html', ra=ra, denied=True,
+                               expired=False, already_acted=False)
+
+    # ── End Reorder Approval Flow ──────────────────────────────────────────────
 
     # siliconeintakes.com product ID map — keyed by part_number
     SI_PRODUCT_IDS = {

@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import base64
 import json
+import secrets
 import requests
 from datetime import datetime, timezone, timedelta
 from flask import current_app
@@ -207,12 +208,96 @@ def sync_recent_orders(hours=24):
     try:
         low_stock = get_low_stock_components()
         if low_stock:
-            send_low_stock_alert(low_stock)
+            try:
+                send_reorder_approval_email(low_stock)
+            except Exception as approval_err:
+                current_app.logger.error(f"Approval email failed, falling back to alert: {approval_err}")
+                send_low_stock_alert(low_stock)
     except Exception as e:
         current_app.logger.error(f"Error in low stock check: {e}")
         low_stock = []
 
     return {'synced': len(results), 'results': results, 'low_stock_count': len(low_stock)}
+
+
+def send_reorder_approval_email(components):
+    """Build a pending reorder approval and email Mike a one-click approve/deny link.
+
+    Groups low-stock items by their primary supplier, calculates suggested order
+    quantities (MoQ or 2× reorder threshold), and stores a ReorderApproval record
+    with a 48-hour expiry token.
+    """
+    from models import ReorderApproval, Supplier, SupplierComponent
+
+    recipients = current_app.config.get('ALERT_RECIPIENTS', '').split(',')
+    recipients = [r.strip() for r in recipients if r.strip()]
+    if not recipients:
+        return
+
+    # Build order items: only components that have a supplier linked
+    items = []
+    for c in components:
+        sc = SupplierComponent.query.filter_by(component_id=c.id).first()
+        if not sc:
+            continue
+        moq = sc.moq or 0
+        suggested_qty = max(moq, c.reorder_threshold * 2 - c.qty, 1)
+        items.append({
+            'part_number': c.part_number,
+            'name': c.name,
+            'qty_on_hand': c.qty,
+            'reorder_threshold': c.reorder_threshold,
+            'qty': suggested_qty,
+            'unit_cost': sc.unit_cost or c.unit_cost or 0,
+            'supplier_id': sc.supplier_id,
+            'supplier_name': sc.supplier.name if sc.supplier else 'Unknown',
+        })
+
+    if not items:
+        return  # No suppliered components to reorder — fall back to plain alert
+
+    total_cost = sum(i['qty'] * i['unit_cost'] for i in items)
+    token = secrets.token_urlsafe(32)
+    expiry = datetime.now(timezone.utc) + timedelta(hours=48)
+
+    ra = ReorderApproval(
+        token=token,
+        status='pending',
+        items_json=json.dumps(items),
+        total_cost=total_cost,
+        expires_at=expiry,
+    )
+    db.session.add(ra)
+    db.session.commit()
+
+    app_url = current_app.config.get('APP_URL', 'https://epp-inventory.onrender.com')
+    approve_url = f"{app_url}/reorder/approve/{token}"
+
+    lines_text = "\n".join(
+        f"  {i['part_number']} — {i['name']}\n"
+        f"    On hand: {i['qty_on_hand']}  |  Reorder at: {i['reorder_threshold']}  |  Order qty: {i['qty']}  @ ${i['unit_cost']:.2f} ea  =  ${i['qty'] * i['unit_cost']:.2f}\n"
+        f"    Supplier: {i['supplier_name']}"
+        for i in items
+    )
+
+    body = (
+        f"Auto-Reorder Approval Required\n"
+        f"{'=' * 45}\n\n"
+        f"The following items have dropped below their reorder threshold:\n\n"
+        f"{lines_text}\n\n"
+        f"{'─' * 45}\n"
+        f"Estimated total:  ${total_cost:.2f}\n\n"
+        f"APPROVE — click this link to create the PO and email suppliers:\n"
+        f"  {approve_url}\n\n"
+        f"Link expires in 48 hours.  If you want to skip this reorder, "
+        f"visit the link and click Deny.\n"
+    )
+
+    try:
+        _smtp_send(recipients, f"[EPP] Reorder Approval Needed — {len(items)} item(s), ${total_cost:.2f}", body)
+        current_app.logger.info(f"Reorder approval email sent, token={token}")
+    except Exception as e:
+        current_app.logger.error(f"Failed to send reorder approval email: {e}")
 
 
 def send_low_stock_alert(components):
