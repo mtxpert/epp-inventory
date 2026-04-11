@@ -94,6 +94,7 @@ class SupplierComponent(db.Model):
     supplier_id = db.Column(db.Integer, db.ForeignKey('suppliers.id'), nullable=False)
     component_id = db.Column(db.Integer, db.ForeignKey('components.id'), nullable=False)
     unit_cost = db.Column(db.Float, default=0)
+    moq = db.Column(db.Integer, default=0)  # minimum order quantity (0 = unset)
 
     supplier = db.relationship('Supplier', back_populates='components')
     component = db.relationship('Component')

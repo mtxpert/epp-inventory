@@ -123,7 +123,7 @@
         <h2>{{ cat_name }}</h2>
         <table>
             <thead>
-                <tr><th>Part #</th><th>Name</th><th>In Stock</th><th>Reorder At</th><th>Adjust</th><th>Used In</th></tr>
+                <tr><th>Part #</th><th>Name</th><th>In Stock</th><th>Reorder At</th>{% if cat_name == 'Clamps' %}<th>MoQ</th>{% endif %}<th>Adjust</th><th>Used In</th></tr>
             </thead>
             <tbody>
                 {% for c in cat_components %}
@@ -137,6 +137,13 @@
                         <input type="number" value="{{ c.reorder_threshold }}" min="0" style="width: 50px; text-align: center; background: #1f2937; border: 1px solid #374151; color: #e0e0e0; border-radius: 4px; padding: 2px 4px; font-size: 12px;"
                             onchange="setThreshold('{{ c.part_number }}', this.value)">
                     </td>
+                    {% if cat_name == 'Clamps' %}
+                    <td>
+                        <input type="number" value="{{ moq_map.get(c.part_number, '') }}" min="1" placeholder="—"
+                            style="width: 60px; text-align: center; background: #1f2937; border: 1px solid #374151; color: #e0e0e0; border-radius: 4px; padding: 2px 4px; font-size: 12px;"
+                            onchange="setMoQ('{{ c.part_number }}', this.value)">
+                    </td>
+                    {% endif %}
                     <td>
                         <div class="adjust-group">
                             <button onclick="adjust('{{ c.part_number }}', -1)">-</button>
@@ -361,6 +368,16 @@ async function setThreshold(pn, threshold) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({part_number: pn, threshold: parseInt(threshold)})
     });
+}
+
+async function setMoQ(pn, moq) {
+    const res = await fetch('/api/moq', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({part_number: pn, moq: parseInt(moq) || 0})
+    });
+    const data = await res.json();
+    if (!data.ok) console.error('MoQ save failed:', data.error);
 }
 
 function updateQtyStyle(pn, qty) {

@@ -140,6 +140,11 @@ def create_app():
         if 'notes' not in kit_cols:
             db.session.execute(db.text("ALTER TABLE kits ADD COLUMN notes VARCHAR(200) DEFAULT ''"))
             db.session.commit()
+        # Add moq column to supplier_components if missing
+        sc_cols = [c['name'] for c in inspector.get_columns('supplier_components')]
+        if 'moq' not in sc_cols:
+            db.session.execute(db.text("ALTER TABLE supplier_components ADD COLUMN moq INTEGER DEFAULT 0"))
+            db.session.commit()
         # Mark raptor kits as delayed
         for rslug in ['raptor_sw_harness', 'raptor_console_harness']:
             rkit = Kit.query.filter_by(slug=rslug).first()
@@ -166,6 +171,9 @@ def create_app():
                  'notes': 'All hoses/couplers', 'category': 'couplers'},
                 {'name': 'Kevin Wolfe / Powill', 'email': 'kwolfe@powill.com', 'contact_name': 'Kevin',
                  'notes': 'BOV mounts and MAP sensor mounts', 'parts': ['BOV-SHO', 'BOV-FUSION', 'MAP-SHO']},
+                {'name': 'Silicone Intakes', 'email': 'orders@siliconeintakes.com', 'contact_name': '',
+                 'notes': 'T-bolt clamps — online ordering at siliconeintakes.com',
+                 'parts': ['CLAMP-150', 'CLAMP-175', 'CLAMP-200', 'CLAMP-250', 'CLAMP-275', 'CLAMP-300']},
             ]
             for sd in suppliers_data:
                 s = Supplier(name=sd['name'], email=sd['email'],
@@ -755,6 +763,14 @@ def register_routes(app):
         )
         on_order_value = projected_retail_value - total_retail_value
 
+        # Build MoQ map for Silicone Intakes clamps {part_number: moq}
+        si = Supplier.query.filter_by(name='Silicone Intakes').first()
+        moq_map = {}
+        if si:
+            for sc in SupplierComponent.query.filter_by(supplier_id=si.id).all():
+                if sc.moq:
+                    moq_map[sc.component.part_number] = sc.moq
+
         return render_template('dashboard.html',
             components=components, kits=kits, categories=categories,
             low_stock=low_stock, total_stock=total_stock,
@@ -765,7 +781,8 @@ def register_routes(app):
             on_order_value=on_order_value,
             pending_pos=pending_pos,
             proj_kit_buildable=proj_kit_buildable,
-            used_in=used_in, recent_orders=recent_orders, recent_logs=recent_logs)
+            used_in=used_in, recent_orders=recent_orders, recent_logs=recent_logs,
+            moq_map=moq_map)
 
     # ── Inventory API ────────────────────────────────────────────
 
@@ -823,6 +840,26 @@ def register_routes(app):
         comp.reorder_threshold = threshold
         db.session.commit()
         return jsonify({'ok': True, 'threshold': comp.reorder_threshold})
+
+    @app.route('/api/moq', methods=['POST'])
+    @login_required
+    def set_moq():
+        """Set MoQ for a component on its Silicone Intakes supplier link."""
+        data = request.get_json()
+        pn = data.get('part_number')
+        moq = int(data.get('moq', 0))
+        comp = Component.query.filter_by(part_number=pn).first()
+        if not comp:
+            return jsonify({'error': 'Component not found'}), 404
+        si = Supplier.query.filter_by(name='Silicone Intakes').first()
+        if not si:
+            return jsonify({'error': 'Silicone Intakes supplier not found'}), 404
+        sc = SupplierComponent.query.filter_by(supplier_id=si.id, component_id=comp.id).first()
+        if not sc:
+            return jsonify({'error': 'No Silicone Intakes mapping for this component'}), 404
+        sc.moq = moq
+        db.session.commit()
+        return jsonify({'ok': True, 'part_number': pn, 'moq': sc.moq})
 
     @app.route('/api/sync-orders', methods=['POST'])
     @login_required
@@ -1273,6 +1310,66 @@ def register_routes(app):
         po.status = 'cancelled'
         db.session.commit()
         return jsonify({'ok': True})
+
+    # siliconeintakes.com product ID map — keyed by part_number
+    SI_PRODUCT_IDS = {
+        'CLAMP-150': 106,   # 1.5"
+        'CLAMP-175': 107,   # 1.75"
+        'CLAMP-200': 100,   # 2.0"
+        'CLAMP-250': 102,   # 2.5"
+        'CLAMP-275': 103,   # 2.75"
+        'CLAMP-300': 104,   # 3.0"
+    }
+
+    @app.route('/api/po/<int:po_id>/place-online', methods=['POST'])
+    @login_required
+    def place_po_online(po_id):
+        """Log in to siliconeintakes.com, add clamp line items to cart, return checkout URL."""
+        import requests as req
+        po = PurchaseOrder.query.get_or_404(po_id)
+
+        si_user = current_app.config.get('SI_USERNAME', '')
+        si_pass = current_app.config.get('SI_PASSWORD', '')
+        if not si_user or not si_pass:
+            return jsonify({'error': 'SI_USERNAME / SI_PASSWORD not configured'}), 500
+
+        # Check all lines are mappable before touching the cart
+        unmapped = [l.component.part_number for l in po.lines
+                    if l.component.part_number not in SI_PRODUCT_IDS]
+        if unmapped:
+            return jsonify({'error': f'No siliconeintakes.com product ID for: {", ".join(unmapped)}'}), 400
+
+        session = req.Session()
+        session.headers.update({'User-Agent': 'Mozilla/5.0 (compatible; EPP-AutoOrder/1.0)'})
+
+        # Login
+        login_r = session.post(
+            'https://www.siliconeintakes.com/account.php',
+            data={'login_email_address': si_user, 'login_password': si_pass, 'action': 'process'},
+            allow_redirects=True, timeout=15
+        )
+        if 'logout' not in login_r.text.lower() and 'my account' not in login_r.text.lower():
+            return jsonify({'error': 'siliconeintakes.com login failed — check credentials'}), 500
+
+        # Add each clamp line to cart
+        added = []
+        for line in po.lines:
+            pid = SI_PRODUCT_IDS[line.component.part_number]
+            r = session.post(
+                'https://www.siliconeintakes.com/shopping_cart.php?action=add_product',
+                data={'products_id': pid, 'cart_quantity': line.qty},
+                allow_redirects=True, timeout=15
+            )
+            if r.status_code == 200:
+                added.append({'part': line.component.part_number, 'qty': line.qty, 'product_id': pid})
+            else:
+                current_app.logger.warning(f"Cart add failed for {line.component.part_number}: {r.status_code}")
+
+        # Extract session cookie to hand back to the browser
+        osCsid = session.cookies.get('osCsid', '')
+        cart_url = f'https://www.siliconeintakes.com/shopping_cart.php?osCsid={osCsid}'
+
+        return jsonify({'ok': True, 'added': added, 'cart_url': cart_url, 'session_id': osCsid})
 
     @app.route('/api/po/rfq', methods=['POST'])
     @login_required
