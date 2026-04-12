@@ -43,11 +43,11 @@ def create_app():
     app.config['ALERT_RECIPIENTS'] = os.environ.get('ALERT_RECIPIENTS', 'info@ecopowerparts.com')
     app.config['APP_URL'] = os.environ.get('APP_URL', 'https://epp-inventory.onrender.com')
     app.config['MOUSER_API_KEY'] = os.environ.get('MOUSER_API_KEY', '')
-    app.config['TURN14_CLIENT_ID'] = os.environ.get('TURN14_CLIENT_ID', 'd6a481e8739ac6112389ef3dbaef9badc729149f')
-    app.config['TURN14_CLIENT_SECRET'] = os.environ.get('TURN14_CLIENT_SECRET', '3f284c18997e2800f6a5e8d08fc931bddf79088e')
-    app.config['SHIPSTATION_API_KEY'] = os.environ.get('SHIPSTATION_API_KEY', '/SLigMj4jFQo1Rr7p7Z9kGy0urmWHlSWUf5l31OAvVI')
-    app.config['SHIPSTATION_V1_KEY'] = os.environ.get('SHIPSTATION_V1_KEY', '1278a66a6ffb46ca8d7deb1a3d177c55')
-    app.config['SHIPSTATION_V1_SECRET'] = os.environ.get('SHIPSTATION_V1_SECRET', 'fd915e301f8b4fb6af3063ebb7c96156')
+    app.config['TURN14_CLIENT_ID'] = os.environ.get('TURN14_CLIENT_ID', '')
+    app.config['TURN14_CLIENT_SECRET'] = os.environ.get('TURN14_CLIENT_SECRET', '')
+    app.config['SHIPSTATION_API_KEY'] = os.environ.get('SHIPSTATION_API_KEY', '')
+    app.config['SHIPSTATION_V1_KEY'] = os.environ.get('SHIPSTATION_V1_KEY', '')
+    app.config['SHIPSTATION_V1_SECRET'] = os.environ.get('SHIPSTATION_V1_SECRET', '')
 
     # Mail config
     app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
@@ -2718,4 +2718,4 @@ def register_routes(app):
 app = create_app()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=True)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
