@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Receiving — EPP Inventory{% endblock %}
+{% block content %}
+
+<h1 style="font-size: 22px; margin-bottom: 8px;">Receiving</h1>
+<p style="color: #64748b; font-size: 14px; margin-bottom: 24px;">Check off items as they arrive. Enter the quantity actually received for each line and click Confirm.</p>
+
+{% if open_pos %}
+{% for po in open_pos %}
+<div class="card" style="margin-bottom: 20px;" id="po-card-{{ po.id }}">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;">
+        <div>
+            <span style="font-size: 17px; font-weight: bold; color: #e0e0e0;">{{ po.po_number }}</span>
+            <span style="color: #64748b; font-size: 14px; margin-left: 12px;">{{ po.supplier.name }}</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px;">
+            {% if po.status == 'draft' %}
+            <span class="badge" style="background: #374151; color: #94a3b8;">Draft</span>
+            {% elif po.status == 'sent' %}
+            <span class="badge" style="background: #1e40af; color: #93c5fd;">Sent to Supplier</span>
+            {% endif %}
+            <span style="color: #64748b; font-size: 12px;">Ordered {{ po.created_at.strftime('%b %d, %Y') if po.created_at else '—' }}</span>
+        </div>
+    </div>
+
+    {% if po.notes %}
+    <p style="font-size: 12px; color: #64748b; margin-bottom: 14px; font-style: italic;">{{ po.notes }}</p>
+    {% endif %}
+
+    <table style="margin-bottom: 16px;">
+        <thead>
+            <tr>
+                <th>Part #</th>
+                <th>Description</th>
+                <th style="text-align: center;">Ordered</th>
+                <th style="text-align: center; color: #86efac;">Qty Received</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for line in po.lines %}
+            <tr>
+                <td><strong>{{ line.component.part_number }}</strong></td>
+                <td style="color: #94a3b8; font-size: 13px;">{{ line.component.name }}</td>
+                <td style="text-align: center; color: #94a3b8;">{{ line.qty }}</td>
+                <td style="text-align: center;">
+                    <input type="number"
+                        id="recv-{{ po.id }}-{{ line.id }}"
+                        value="{{ line.qty }}"
+                        min="0" max="{{ line.qty }}"
+                        data-line-id="{{ line.id }}"
+                        style="width: 80px; padding: 6px 10px; background: #1f2937; border: 2px solid #374151; border-radius: 6px; color: #e0e0e0; font-size: 14px; text-align: center;">
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div style="display: flex; gap: 12px; align-items: center;">
+        <button class="btn btn-primary" style="background: #166534; border-color: #166534; padding: 10px 24px;"
+            onclick="confirmReceive({{ po.id }})">
+            ✓ Confirm Receipt
+        </button>
+        <span id="recv-status-{{ po.id }}" style="font-size: 13px;"></span>
+    </div>
+</div>
+{% endfor %}
+
+{% else %}
+<div class="card" style="text-align: center; padding: 48px;">
+    <div style="font-size: 48px; margin-bottom: 12px; opacity: 0.4;">📦</div>
+    <p style="color: #64748b; font-size: 15px;">No open orders to receive.</p>
+    <p style="color: #475569; font-size: 13px;">All purchase orders have been received or cancelled.</p>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function confirmReceive(poId) {
+    const lines = [];
+    document.querySelectorAll(`[id^="recv-${poId}-"]`).forEach(input => {
+        const qty = parseInt(input.value) || 0;
+        if (qty > 0) lines.push({line_id: parseInt(input.dataset.lineId), qty});
+    });
+
+    const statusEl = document.getElementById(`recv-status-${poId}`);
+    if (!lines.length) {
+        statusEl.textContent = 'Enter at least one quantity.';
+        statusEl.style.color = '#f87171';
+        return;
+    }
+
+    statusEl.textContent = 'Saving...';
+    statusEl.style.color = '#94a3b8';
+
+    const res = await fetch(`/api/po/${poId}/receive`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({lines})
+    });
+    const data = await res.json();
+
+    if (data.ok) {
+        statusEl.textContent = `✓ Received ${data.total_received} items — inventory updated`;
+        statusEl.style.color = '#4ade80';
+        const card = document.getElementById(`po-card-${poId}`);
+        card.style.opacity = '0.5';
+        card.style.pointerEvents = 'none';
+        setTimeout(() => card.remove(), 2000);
+    } else {
+        statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
+        statusEl.style.color = '#f87171';
+    }
+}
+</script>
+{% endblock %}

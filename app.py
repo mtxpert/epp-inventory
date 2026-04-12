@@ -1065,6 +1065,14 @@ def register_routes(app):
         pos = PurchaseOrder.query.order_by(PurchaseOrder.created_at.desc()).all()
         return render_template('purchase_orders.html', suppliers=suppliers, purchase_orders=pos)
 
+    @app.route('/receiving')
+    @login_required
+    def receiving():
+        open_pos = PurchaseOrder.query.filter(
+            PurchaseOrder.status.in_(['draft', 'sent'])
+        ).order_by(PurchaseOrder.created_at.desc()).all()
+        return render_template('receiving.html', open_pos=open_pos)
+
     @app.route('/api/po/create', methods=['POST'])
     @login_required
     def create_po():
