@@ -1428,30 +1428,39 @@ def register_routes(app):
             db.session.refresh(po)
             supplier = po.supplier
             if supplier.name == 'Silicone Intakes':
-                # Pre-load cart via requests, return checkout URL for one-click completion
                 try:
-                    from silicone_checkout import load_cart
+                    from silicone_checkout import place_clamp_order, load_cart
                     order_lines = [{'part_number': l.component.part_number,
                                     'qty': l.qty, 'unit_cost': l.unit_cost}
                                    for l in po.lines]
-                    result = load_cart(order_lines)
+                    result = place_clamp_order(order_lines)
                     if result['ok']:
                         po.status = 'sent'
                         po.sent_at = now
+                        po.notes = (po.notes or '') + f" | SI order #{result.get('order_number','')}"
                         po_results.append({
                             'po_number': po.po_number,
-                            'status': 'cart_ready',
-                            'detail': 'Cart loaded on siliconeintakes.com — click below to complete checkout',
-                            'checkout_url': result['checkout_url']
+                            'status': 'ordered',
+                            'detail': f"Order placed on siliconeintakes.com — ref #{result.get('order_number', 'confirmed')}"
                         })
                     else:
-                        po_results.append({
-                            'po_number': po.po_number,
-                            'status': 'error',
-                            'detail': f"Cart load failed: {result['error']}"
-                        })
+                        # Full order failed — fall back to cart-only so user can complete manually
+                        current_app.logger.warning(f"SI auto-order failed ({result['error']}), falling back to cart load")
+                        cart = load_cart(order_lines)
+                        if cart['ok']:
+                            po.status = 'sent'
+                            po.sent_at = now
+                            po_results.append({
+                                'po_number': po.po_number,
+                                'status': 'cart_ready',
+                                'detail': f"Auto-order failed ({result['error']}) — cart loaded, click to complete checkout",
+                                'checkout_url': cart['checkout_url']
+                            })
+                        else:
+                            po_results.append({'po_number': po.po_number, 'status': 'error',
+                                               'detail': result['error']})
                 except Exception as e:
-                    current_app.logger.error(f"SI cart load exception for {po.po_number}: {e}")
+                    current_app.logger.error(f"SI order exception for {po.po_number}: {e}")
                     po_results.append({'po_number': po.po_number, 'status': 'error', 'detail': str(e)})
             else:
                 # Email PO to supplier
