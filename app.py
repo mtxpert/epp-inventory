@@ -1428,31 +1428,30 @@ def register_routes(app):
             db.session.refresh(po)
             supplier = po.supplier
             if supplier.name == 'Silicone Intakes':
-                # Auto-checkout via Playwright
+                # Pre-load cart via requests, return checkout URL for one-click completion
                 try:
-                    from silicone_checkout import place_clamp_order
+                    from silicone_checkout import load_cart
                     order_lines = [{'part_number': l.component.part_number,
                                     'qty': l.qty, 'unit_cost': l.unit_cost}
                                    for l in po.lines]
-                    result = place_clamp_order(order_lines)
+                    result = load_cart(order_lines)
                     if result['ok']:
                         po.status = 'sent'
                         po.sent_at = now
-                        po.notes = (po.notes or '') + f" | Auto-ordered: SI#{result.get('order_number','')}"
                         po_results.append({
                             'po_number': po.po_number,
-                            'status': 'ordered',
-                            'detail': f"Order placed on siliconeintakes.com — ref #{result.get('order_number','confirmed')}"
+                            'status': 'cart_ready',
+                            'detail': 'Cart loaded on siliconeintakes.com — click below to complete checkout',
+                            'checkout_url': result['checkout_url']
                         })
                     else:
                         po_results.append({
                             'po_number': po.po_number,
                             'status': 'error',
-                            'detail': f"Checkout failed: {result['error']}"
+                            'detail': f"Cart load failed: {result['error']}"
                         })
-                        current_app.logger.error(f"SI auto-checkout failed for {po.po_number}: {result['error']}")
                 except Exception as e:
-                    current_app.logger.error(f"SI auto-checkout exception for {po.po_number}: {e}")
+                    current_app.logger.error(f"SI cart load exception for {po.po_number}: {e}")
                     po_results.append({'po_number': po.po_number, 'status': 'error', 'detail': str(e)})
             else:
                 # Email PO to supplier

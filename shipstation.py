@@ -90,6 +90,17 @@ def mark_shipped_v1(order_number, tracking_number, carrier_code, ship_date=None)
     return None
 
 
+def _ups_pkg(dims, weight_lb):
+    """UPS package with explicit dimensions using generic 'package' code.
+    Custom package codes store dims in ShipStation — using generic avoids misconfigured definitions."""
+    length, width, height = dims
+    return {
+        "package_code": "package",
+        "weight": {"value": weight_lb, "unit": "pound"},
+        "dimensions": {"unit": "inch", "length": length, "width": width, "height": height},
+    }
+
+
 def _kit_shipping_config(kit_name, qty=1):
     """Map kit name → (warehouse_id, carrier_id, service_code, packages_list)."""
     name = kit_name.lower()
@@ -109,33 +120,34 @@ def _kit_shipping_config(kit_name, qty=1):
             {"package_code": PKG_USPS_MEDIUM_FR, "weight": {"value": 3, "unit": "pound"}}
         ]
     if ("noisemaker" in name or "nmd" in name) and "upgrade" in name:
-        # NMD upgrade includes full hot pipes — ships UPS like hot pipes
+        # NMD upgrade includes full hot pipes — 24×13×7
         return WH_TEMPE, CARRIER_UPS, "ups_ground", [
-            {"package_code": PKG_HOT_PIPES, "weight": {"value": 6, "unit": "pound"}}
+            _ups_pkg((24, 13, 7), 6)
         ]
     if "fusion" in name and "charge" in name:
+        # Fusion charge pipes — 28×17×7
         return WH_TEMPE, CARRIER_UPS, "ups_ground", [
-            {"package_code": PKG_FUSION_CHARGE, "weight": {"value": 6, "unit": "pound"}}
+            _ups_pkg((28, 17, 7), 6)
         ]
     if "fusion" in name and "intake" in name:
-        # Fusion intake fits in hot-pipes box (24×13×7)
+        # Fusion intake pipes — 24×13×7
         return WH_TEMPE, CARRIER_UPS, "ups_ground", [
-            {"package_code": PKG_HOT_PIPES, "weight": {"value": 6, "unit": "pound"}},
+            _ups_pkg((24, 13, 7), 6)
         ]
     if "intake" in name and "filter" not in name:
-        # SHO/Explorer intake ships in intake-pipes box (24×15×11)
+        # SHO/Explorer intake — 24×15×11 (larger: filter + heat shield + hoses)
         return WH_TEMPE, CARRIER_UPS, "ups_ground", [
-            {"package_code": PKG_INTAKE_PIPES, "weight": {"value": 8, "unit": "pound"}},
+            _ups_pkg((24, 15, 11), 8)
         ]
     if "filter" in name:
-        # Each filter ships in its own 9x9x9 box — qty boxes for qty filters
+        # Each filter ships in its own 9×9×9 box
         return WH_TEMPE, CARRIER_UPS, "ups_ground", [
-            {"package_code": PKG_FILTER, "weight": {"value": 2, "unit": "pound"}}
+            _ups_pkg((9, 9, 9), 2)
             for _ in range(max(1, qty))
         ]
-    # Default: hot pipes box (SHO, Explorer, Fusion Intake, all other pipe kits)
+    # Default: hot pipes box 24×13×7
     return WH_TEMPE, CARRIER_UPS, "ups_ground", [
-        {"package_code": PKG_HOT_PIPES, "weight": {"value": 6, "unit": "pound"}}
+        _ups_pkg((24, 13, 7), 6)
     ]
 
 

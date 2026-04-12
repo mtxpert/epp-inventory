@@ -85,43 +85,60 @@ class Turn14Client:
             "mfr_esd": mfr.get("esd"),
         }
 
-    def get_shipping_quote(self, items, ship_to):
+    def get_shipping_quote(self, items, recipient, environment="production"):
         """
         Get shipping options for a customer address.
         items: list of {"item_id": str, "qty": int}
-        ship_to: {"name", "address1", "city", "state", "zip", "country", "phone"}
-        Returns list of shipping options sorted by cost.
+        recipient: {"name", "address", "address_2", "city", "state", "zip", "country", "phone_number", "is_shop_address"}
+        Returns (quote_id, shipments) where shipments is a list of {location, type, items, shipping: [...sorted by cost]}
         """
         payload = {
-            "shipto": ship_to,
-            "items": [{"item_id": i["item_id"], "quantity": i["qty"]} for i in items],
+            "data": {
+                "environment": environment,
+                "locations": [{
+                    "location": "default",
+                    "combine_in_out_stock": True,
+                    "items": [{"item_identifier": i["item_id"], "item_identifier_type": "item_id", "quantity": str(i["qty"])} for i in items],
+                    "shipping": {"shipping_code": 3},
+                }],
+                "acknowledge_prop_65": True,
+                "recipient": recipient,
+            }
         }
         r = requests.post(f"{BASE_URL}/v1/quote", json=payload, headers=self._headers(), timeout=20)
         r.raise_for_status()
-        data = r.json()
-        quotes = []
-        for shipment in data.get("shipments", [data]):
-            for opt in shipment.get("shipping", []):
-                quotes.append({
-                    "shipping_quote_id": opt["shipping_quote_id"],
-                    "shipping_code": opt["shipping_code"],
-                    "cost": opt["cost"],
-                    "days_in_transit": opt["days_in_transit"],
+        data = r.json()["data"]
+        quote_id = data["id"]
+        shipments = []
+        for shipment in data["attributes"].get("shipment", []):
+            shipping_opts = shipment.get("shipping", [])
+            if isinstance(shipping_opts, list):
+                shipments.append({
+                    "location": shipment.get("location"),
+                    "type": shipment.get("type"),
+                    "items": shipment.get("items", []),
+                    "shipping": sorted(shipping_opts, key=lambda x: x["cost"]),
                 })
-        return sorted(quotes, key=lambda x: x["cost"])
+        return quote_id, shipments
 
-    def place_order(self, po_number, shipping_quote_id, ship_to, items):
+    def place_order(self, po_number, quote_id, shipping_ids, environment="production"):
         """
         Place a dropship order using a quote result.
+        quote_id: int returned by get_shipping_quote()
+        shipping_ids: list of int shipping_quote_ids (one per shipment)
         Returns the Turn14 order response.
         """
         payload = {
-            "po_number": po_number,
-            "shipping_quote_id": shipping_quote_id,
-            "shipto": ship_to,
-            "items": [{"item_id": i["item_id"], "quantity": i["qty"]} for i in items],
+            "data": {
+                "environment": environment,
+                "quote_id": quote_id,
+                "po_number": po_number,
+                "acknowledge_prop_65": True,
+                "acknowledge_epa": True,
+                "shipping": [{"shipping_id": sid} for sid in shipping_ids],
+            }
         }
-        r = requests.post(f"{BASE_URL}/v1/orders/from_quote", json=payload, headers=self._headers(), timeout=20)
+        r = requests.post(f"{BASE_URL}/v1/order/from_quote", json=payload, headers=self._headers(), timeout=20)
         r.raise_for_status()
         return r.json()
 

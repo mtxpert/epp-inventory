@@ -32,14 +32,22 @@
         <h1 style="font-size: 20px; color: #86efac;">Reorder Approved</h1>
     </div>
     {% for r in po_results %}
-    <div style="background: #0f172a; border: 1px solid {% if r.status == 'ordered' %}#166534{% elif r.status == 'emailed' %}#1e40af{% else %}#7f1d1d{% endif %}; border-radius: 8px; padding: 14px; margin-bottom: 10px;">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
+    {% set border = '#0e7490' if r.status == 'cart_ready' else '#166534' if r.status == 'emailed' else '#7f1d1d' %}
+    <div style="background: #0f172a; border: 1px solid {{ border }}; border-radius: 8px; padding: 14px; margin-bottom: 10px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <strong style="color: #e0e0e0;">{{ r.po_number }}</strong>
-            <span style="font-size: 12px; padding: 3px 10px; border-radius: 4px; background: {% if r.status == 'ordered' %}#166534{% elif r.status == 'emailed' %}#1e40af{% else %}#7f1d1d{% endif %}; color: #fff;">
-                {% if r.status == 'ordered' %}Order Placed{% elif r.status == 'emailed' %}PO Emailed{% else %}Error{% endif %}
+            <span style="font-size: 12px; padding: 3px 10px; border-radius: 4px; background: {{ border }}; color: #fff;">
+                {% if r.status == 'cart_ready' %}Cart Ready{% elif r.status == 'emailed' %}PO Emailed{% else %}Error{% endif %}
             </span>
         </div>
-        <p style="color: #94a3b8; font-size: 13px; margin: 6px 0 0;">{{ r.detail }}</p>
+        <p style="color: #94a3b8; font-size: 13px; margin: 0 0 10px;">{{ r.detail }}</p>
+        {% if r.status == 'cart_ready' and r.checkout_url %}
+        <a href="{{ r.checkout_url }}" target="_blank"
+           style="display: inline-block; padding: 10px 24px; background: #0e7490; color: #fff; border-radius: 6px; text-decoration: none; font-size: 14px; font-weight: bold;">
+            🛒 Complete Checkout on siliconeintakes.com →
+        </a>
+        <p style="color: #64748b; font-size: 11px; margin: 8px 0 0;">Cart is pre-loaded and ready. Link expires when the session ends (~30 min).</p>
+        {% endif %}
     </div>
     {% endfor %}
     <div style="text-align: center; margin-top: 20px;">
