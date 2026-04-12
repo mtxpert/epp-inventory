@@ -91,9 +91,16 @@
                 <td style="color: #94a3b8; font-size: 13px;">{{ item.name }}</td>
                 <td style="text-align: center; {% if item.qty_on_hand <= 0 %}color: #f87171;{% else %}color: #fbbf24;{% endif %}">{{ item.qty_on_hand }}</td>
                 <td style="text-align: center; color: #64748b;">{{ item.reorder_threshold }}</td>
-                <td style="text-align: center; color: #e0e0e0; font-weight: bold;">{{ item.qty }}</td>
+                <td style="text-align: center;">
+                    <input type="number" class="qty-input"
+                        data-unit-cost="{{ item.unit_cost }}"
+                        data-part="{{ item.part_number }}"
+                        value="{{ item.qty }}" min="1"
+                        style="width: 80px; padding: 5px 8px; background: #1f2937; border: 1px solid #374151; border-radius: 4px; color: #e0e0e0; font-size: 14px; font-weight: bold; text-align: center;"
+                        oninput="updateTotals()">
+                </td>
                 <td style="text-align: right; color: #94a3b8;">${{ "%.2f"|format(item.unit_cost) }}</td>
-                <td style="text-align: right; color: #4ade80;">${{ "%.2f"|format(item.qty * item.unit_cost) }}</td>
+                <td style="text-align: right; color: #4ade80;" class="line-total" id="total-{{ item.part_number }}">${{ "%.2f"|format(item.qty * item.unit_cost) }}</td>
                 <td style="color: #64748b; font-size: 12px;">{{ item.supplier_name }}</td>
             </tr>
             {% endfor %}
@@ -101,14 +108,16 @@
         <tfoot>
             <tr>
                 <td colspan="6" style="text-align: right; color: #94a3b8; font-size: 13px; padding-top: 10px;">Estimated Total:</td>
-                <td style="text-align: right; color: #4ade80; font-weight: bold; font-size: 15px; padding-top: 10px;">${{ "%.2f"|format(ra.total_cost) }}</td>
+                <td style="text-align: right; color: #4ade80; font-weight: bold; font-size: 17px; padding-top: 10px;" id="grand-total">${{ "%.2f"|format(ra.total_cost) }}</td>
                 <td></td>
             </tr>
         </tfoot>
     </table>
 
-    <div style="display: flex; gap: 16px; align-items: center;">
-        <form method="POST" action="/reorder/approve/{{ ra.token }}/confirm" style="display: inline;">
+    <div style="display: flex; gap: 16px; align-items: center; flex-wrap: wrap;">
+        <form method="POST" action="/reorder/approve/{{ ra.token }}/confirm" id="approve-form" style="display: inline;">
+            <!-- qty overrides submitted as hidden fields, filled by JS -->
+            <div id="qty-hidden-fields"></div>
             <button type="submit" class="btn btn-primary" style="padding: 12px 32px; font-size: 15px; background: #166534; border-color: #166534;">
                 ✅ Approve &amp; Place Orders
             </button>
@@ -119,6 +128,33 @@
             </button>
         </form>
     </div>
+
+<script>
+function updateTotals() {
+    let grand = 0;
+    document.querySelectorAll('.qty-input').forEach(inp => {
+        const qty = parseInt(inp.value) || 0;
+        const cost = parseFloat(inp.dataset.unitCost) || 0;
+        const line = qty * cost;
+        grand += line;
+        const el = document.getElementById('total-' + inp.dataset.part);
+        if (el) el.textContent = '$' + line.toFixed(2);
+    });
+    document.getElementById('grand-total').textContent = '$' + grand.toFixed(2);
+}
+
+document.getElementById('approve-form').addEventListener('submit', function() {
+    const container = document.getElementById('qty-hidden-fields');
+    container.innerHTML = '';
+    document.querySelectorAll('.qty-input').forEach(inp => {
+        const h = document.createElement('input');
+        h.type = 'hidden';
+        h.name = 'qty_' + inp.dataset.part;
+        h.value = inp.value;
+        container.appendChild(h);
+    });
+});
+</script>
 </div>
 {% endif %}
 

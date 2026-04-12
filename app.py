@@ -1382,6 +1382,12 @@ def register_routes(app):
             return render_template('reorder_approval.html', ra=ra, expired=True, already_acted=False)
 
         items = json.loads(ra.items_json)
+        # Apply any qty overrides from the approval form
+        for item in items:
+            override_key = f"qty_{item['part_number']}"
+            override = request.form.get(override_key)
+            if override and override.isdigit() and int(override) > 0:
+                item['qty'] = int(override)
         # Group by supplier
         by_supplier = {}
         for item in items:
