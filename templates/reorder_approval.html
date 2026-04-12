@@ -26,18 +26,25 @@
 </div>
 
 {% elif approved %}
-<div style="background: #052e16; border: 1px solid #166534; border-radius: 12px; padding: 32px; text-align: center;">
-    <div style="font-size: 48px; margin-bottom: 12px;">✅</div>
-    <h1 style="font-size: 20px; color: #86efac; margin-bottom: 8px;">Reorder Approved</h1>
-    <p style="color: #94a3b8; font-size: 14px; margin-bottom: 16px;">
-        Purchase orders have been created and emailed to suppliers:
-    </p>
-    <ul style="list-style: none; padding: 0; margin-bottom: 20px;">
-        {% for pn in po_numbers %}
-        <li style="color: #86efac; font-size: 15px; font-weight: bold;">{{ pn }}</li>
-        {% endfor %}
-    </ul>
-    <a href="/purchase-orders" class="btn btn-primary" style="text-decoration: none; padding: 10px 24px;">View Purchase Orders</a>
+<div style="background: #052e16; border: 1px solid #166534; border-radius: 12px; padding: 32px;">
+    <div style="text-align: center; margin-bottom: 20px;">
+        <div style="font-size: 48px; margin-bottom: 8px;">✅</div>
+        <h1 style="font-size: 20px; color: #86efac;">Reorder Approved</h1>
+    </div>
+    {% for r in po_results %}
+    <div style="background: #0f172a; border: 1px solid {% if r.status == 'ordered' %}#166534{% elif r.status == 'emailed' %}#1e40af{% else %}#7f1d1d{% endif %}; border-radius: 8px; padding: 14px; margin-bottom: 10px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <strong style="color: #e0e0e0;">{{ r.po_number }}</strong>
+            <span style="font-size: 12px; padding: 3px 10px; border-radius: 4px; background: {% if r.status == 'ordered' %}#166534{% elif r.status == 'emailed' %}#1e40af{% else %}#7f1d1d{% endif %}; color: #fff;">
+                {% if r.status == 'ordered' %}Order Placed{% elif r.status == 'emailed' %}PO Emailed{% else %}Error{% endif %}
+            </span>
+        </div>
+        <p style="color: #94a3b8; font-size: 13px; margin: 6px 0 0;">{{ r.detail }}</p>
+    </div>
+    {% endfor %}
+    <div style="text-align: center; margin-top: 20px;">
+        <a href="/receiving" class="btn btn-primary" style="text-decoration: none; padding: 10px 24px;">View Receiving</a>
+    </div>
 </div>
 
 {% elif denied %}

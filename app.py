@@ -59,6 +59,21 @@ def create_app():
     app.config['SENDGRID_API_KEY'] = os.environ.get('SENDGRID_API_KEY', '')
     app.config['PAYPAL_CLIENT_ID'] = os.environ.get('PAYPAL_CLIENT_ID', '')
     app.config['PAYPAL_CLIENT_SECRET'] = os.environ.get('PAYPAL_CLIENT_SECRET', '')
+    # Silicone Intakes auto-order credentials
+    app.config['SI_USERNAME'] = os.environ.get('SI_USERNAME', '')
+    app.config['SI_PASSWORD'] = os.environ.get('SI_PASSWORD', '')
+    app.config['SI_CC_NAME']   = os.environ.get('SI_CC_NAME', '')
+    app.config['SI_CC_NUMBER'] = os.environ.get('SI_CC_NUMBER', '')
+    app.config['SI_CC_CVV']    = os.environ.get('SI_CC_CVV', '')
+    app.config['SI_CC_EXPIRY'] = os.environ.get('SI_CC_EXPIRY', '')   # MM/YY
+    app.config['SI_CC_ZIP']    = os.environ.get('SI_CC_ZIP', '')
+    app.config['SI_SHIP_FIRST']   = os.environ.get('SI_SHIP_FIRST', 'Joshua')
+    app.config['SI_SHIP_LAST']    = os.environ.get('SI_SHIP_LAST', 'Durmaj')
+    app.config['SI_SHIP_ADDRESS'] = os.environ.get('SI_SHIP_ADDRESS', '910 S Hohokam')
+    app.config['SI_SHIP_ADDRESS2']= os.environ.get('SI_SHIP_ADDRESS2', '#118')
+    app.config['SI_SHIP_CITY']    = os.environ.get('SI_SHIP_CITY', 'Tempe')
+    app.config['SI_SHIP_STATE']   = os.environ.get('SI_SHIP_STATE', 'AZ')
+    app.config['SI_SHIP_ZIP']     = os.environ.get('SI_SHIP_ZIP', '85281')
 
     # Scheduler config
     app.config['SCHEDULER_API_ENABLED'] = False
@@ -1407,35 +1422,63 @@ def register_routes(app):
             ra.po_id = created_pos[0].id
         db.session.commit()
 
-        # Send PO emails to suppliers
-        po_numbers = []
+        # Place orders — Silicone Intakes gets auto-checkout, others get PO email
+        po_results = []
         for po in created_pos:
-            try:
-                db.session.refresh(po)
-                from shopify_sync import _smtp_send
-                supplier = po.supplier
-                lines_text = "\n".join(
-                    f"  {l.component.part_number} — {l.component.name} × {l.qty}  @ ${l.unit_cost:.2f}"
-                    for l in po.lines
-                )
-                body = (f"Purchase Order: {po.po_number}\n"
-                        f"From: EcoPowerParts\n"
-                        f"To: {supplier.name}\n\n"
-                        f"Items:\n{lines_text}\n\n"
-                        f"Total: ${po.total:.2f}\n\n"
-                        f"Auto-generated from approved reorder.\n")
-                if supplier.email:
-                    _smtp_send([supplier.email], f"PO {po.po_number} — EcoPowerParts", body)
-                po.status = 'sent'
-                po.sent_at = now
-                po_numbers.append(po.po_number)
-            except Exception as e:
-                current_app.logger.error(f"Failed to email PO {po.po_number}: {e}")
-                po_numbers.append(po.po_number + ' (email failed)')
+            db.session.refresh(po)
+            supplier = po.supplier
+            if supplier.name == 'Silicone Intakes':
+                # Auto-checkout via Playwright
+                try:
+                    from silicone_checkout import place_clamp_order
+                    order_lines = [{'part_number': l.component.part_number,
+                                    'qty': l.qty, 'unit_cost': l.unit_cost}
+                                   for l in po.lines]
+                    result = place_clamp_order(order_lines)
+                    if result['ok']:
+                        po.status = 'sent'
+                        po.sent_at = now
+                        po.notes = (po.notes or '') + f" | Auto-ordered: SI#{result.get('order_number','')}"
+                        po_results.append({
+                            'po_number': po.po_number,
+                            'status': 'ordered',
+                            'detail': f"Order placed on siliconeintakes.com — ref #{result.get('order_number','confirmed')}"
+                        })
+                    else:
+                        po_results.append({
+                            'po_number': po.po_number,
+                            'status': 'error',
+                            'detail': f"Checkout failed: {result['error']}"
+                        })
+                        current_app.logger.error(f"SI auto-checkout failed for {po.po_number}: {result['error']}")
+                except Exception as e:
+                    current_app.logger.error(f"SI auto-checkout exception for {po.po_number}: {e}")
+                    po_results.append({'po_number': po.po_number, 'status': 'error', 'detail': str(e)})
+            else:
+                # Email PO to supplier
+                try:
+                    from shopify_sync import _smtp_send
+                    lines_text = "\n".join(
+                        f"  {l.component.part_number} — {l.component.name} × {l.qty}  @ ${l.unit_cost:.2f}"
+                        for l in po.lines
+                    )
+                    body = (f"Purchase Order: {po.po_number}\n"
+                            f"From: EcoPowerParts\n\n"
+                            f"Items:\n{lines_text}\n\n"
+                            f"Total: ${po.total:.2f}\n\nAuto-generated reorder.\n")
+                    if supplier.email:
+                        _smtp_send([supplier.email], f"PO {po.po_number} — EcoPowerParts", body)
+                    po.status = 'sent'
+                    po.sent_at = now
+                    po_results.append({'po_number': po.po_number, 'status': 'emailed',
+                                       'detail': f"PO emailed to {supplier.name}"})
+                except Exception as e:
+                    current_app.logger.error(f"Failed to email PO {po.po_number}: {e}")
+                    po_results.append({'po_number': po.po_number, 'status': 'error', 'detail': str(e)})
         db.session.commit()
 
         return render_template('reorder_approval.html', ra=ra, items=items,
-                               approved=True, po_numbers=po_numbers,
+                               approved=True, po_results=po_results,
                                expired=False, already_acted=False)
 
     @app.route('/reorder/approve/<token>/deny', methods=['POST'])
