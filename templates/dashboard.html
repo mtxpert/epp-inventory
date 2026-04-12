@@ -141,7 +141,7 @@
                     <td>
                         <input type="number" value="{{ moq_map.get(c.part_number, '') }}" min="1" placeholder="—"
                             style="width: 60px; text-align: center; background: #1f2937; border: 1px solid #374151; color: #e0e0e0; border-radius: 4px; padding: 2px 4px; font-size: 12px;"
-                            onchange="setMoQ('{{ c.part_number }}', this.value)">
+                            onchange="setMoQ('{{ c.part_number }}', this.value, this)">
                     </td>
                     {% endif %}
                     <td>
@@ -370,14 +370,25 @@ async function setThreshold(pn, threshold) {
     });
 }
 
-async function setMoQ(pn, moq) {
+async function setMoQ(pn, moq, inputEl) {
+    if (inputEl) { inputEl.style.borderColor = '#374151'; inputEl.title = 'Saving...'; }
     const res = await fetch('/api/moq', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({part_number: pn, moq: parseInt(moq) || 0})
     });
     const data = await res.json();
-    if (!data.ok) console.error('MoQ save failed:', data.error);
+    if (inputEl) {
+        if (data.ok) {
+            inputEl.style.borderColor = '#166534';
+            inputEl.title = 'Saved';
+            setTimeout(() => { inputEl.style.borderColor = '#374151'; inputEl.title = ''; }, 2000);
+        } else {
+            inputEl.style.borderColor = '#dc2626';
+            inputEl.title = 'Save failed: ' + (data.error || 'unknown error');
+            console.error('MoQ save failed:', data.error);
+        }
+    }
 }
 
 function updateQtyStyle(pn, qty) {

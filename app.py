@@ -866,7 +866,10 @@ def register_routes(app):
             return jsonify({'error': 'Silicone Intakes supplier not found'}), 404
         sc = SupplierComponent.query.filter_by(supplier_id=si.id, component_id=comp.id).first()
         if not sc:
-            return jsonify({'error': 'No Silicone Intakes mapping for this component'}), 404
+            # Create the supplier-component link on the fly
+            sc = SupplierComponent(supplier_id=si.id, component_id=comp.id, unit_cost=0, moq=0)
+            db.session.add(sc)
+            db.session.flush()
         sc.moq = moq
         db.session.commit()
         return jsonify({'ok': True, 'part_number': pn, 'moq': sc.moq})
